@@ -8,6 +8,7 @@ import { HORIZON_BY_REALM, SLOTS_BY_REALM } from "../sim/stages.js";
 import { defaultInstincts, ruleCost, type Rule } from "../sim/reflex.js";
 import { chargeReflexEdit, resolve } from "../sim/resolve.js";
 import { getSystem } from "../sim/starmap.js";
+import { WEBHOOK_MAX_FAILURES, buildDigest, notableSince, validWebhookUrl } from "./notify.js";
 import { chainLink, genesisState, stableStringify, stateHash } from "../sim/support.js";
 import type { Envelope, Order, SimState } from "../sim/types.js";
 
@@ -36,6 +37,9 @@ interface Persisted {
   chain: string; // latest audit link
   systemId: string; // which star this DO is (M2a; pre-M2a blobs default wei-9-home)
   inbox: Envelope[]; // undelivered light-lagged mail, ordered on insert
+  webhookUrl?: string; // Watchtower (M2d): where notable events get pushed
+  webhookFailures?: number;
+  lastNotifiedTick?: number;
 }
 
 export class SystemDO {
@@ -126,6 +130,35 @@ export class SystemDO {
       if (t % 48 === 0) await this.ctx.storage.put("p", p);
     }
     await this.ctx.storage.put("p", p);
+    await this.notify(p, sys.name);
+  }
+
+  /** Watchtower: push notable lines from newly resolved ticks. Lossy by
+   * contract — one attempt, failures counted, disabled after too many. */
+  private async notify(p: Persisted, systemName: string): Promise<void> {
+    if (!p.webhookUrl || (p.webhookFailures ?? 0) >= WEBHOOK_MAX_FAILURES) return;
+    const after = p.lastNotifiedTick ?? p.sim.tick; // first save arms it forward-only
+    const lines = notableSince(p.sim.log, after);
+    if (p.lastNotifiedTick === undefined || p.sim.tick <= after) {
+      p.lastNotifiedTick = p.sim.tick;
+      await this.ctx.storage.put("p", p);
+      return;
+    }
+    p.lastNotifiedTick = p.sim.tick;
+    if (lines.length) {
+      const digest = buildDigest(p.systemId, systemName, p.sim.tick, p.sim.store_eu, p.sim.heatBank_eu, lines);
+      try {
+        const r = await fetch(p.webhookUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(digest),
+        });
+        p.webhookFailures = r.ok ? 0 : (p.webhookFailures ?? 0) + 1;
+      } catch {
+        p.webhookFailures = (p.webhookFailures ?? 0) + 1;
+      }
+    }
+    await this.ctx.storage.put("p", p);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -168,6 +201,32 @@ export class SystemDO {
 
     const toTick = Number(url.searchParams.get("toTick") ?? p.sim.tick);
     await this.advanceTo(p, toTick); // lazy catch-up on every contact
+
+    if (url.pathname === "/webhook") {
+      if (req.method === "PUT") {
+        const body = ((await readJson()) ?? {}) as { url?: string };
+        if (!body.url || !validWebhookUrl(body.url)) return json({ error: "https URL required" }, 400);
+        p.webhookUrl = body.url;
+        p.webhookFailures = 0;
+        p.lastNotifiedTick = p.sim.tick; // forward-only: never replay history into a fresh hook
+        await this.ctx.storage.put("p", p);
+        return json({ ok: true, armed_from_tick: p.sim.tick });
+      }
+      if (req.method === "DELETE") {
+        delete p.webhookUrl;
+        await this.ctx.storage.put("p", p);
+        return json({ ok: true });
+      }
+      if (req.method === "GET") {
+        return json({
+          configured: !!p.webhookUrl,
+          url_tail: p.webhookUrl ? "…" + p.webhookUrl.slice(-12) : null,
+          failures: p.webhookFailures ?? 0,
+          disabled: (p.webhookFailures ?? 0) >= WEBHOOK_MAX_FAILURES,
+          last_notified_tick: p.lastNotifiedTick ?? null,
+        });
+      }
+    }
 
     if (req.method === "GET" && url.pathname === "/state") {
       const pending: Array<{ tick: number; orders: Order[] }> = [];

@@ -282,6 +282,15 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div id="signals"><div>— nothing held —</div></div>
       </div>
       <div class="card wide" style="margin-top:16px;">
+        <h2>Watchtower — get pinged when it matters</h2>
+        <div class="ctl">
+          <input id="wh-url" type="text" placeholder="https:// webhook URL (paste a Discord webhook — it just works)" style="flex:1; min-width:240px; padding:8px 10px; background:var(--panel2); border:1px solid var(--edge); border-radius:8px; color:var(--ink); font:inherit;" />
+          <button class="btn" id="wh-save">Arm</button>
+          <button class="btn ghost" id="wh-clear">Disarm</button>
+        </div>
+        <div id="wh-status" class="sub">—</div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
         <h2>Reflexes — your automation is you</h2>
         <div class="ctl">
           <button class="btn ghost" id="rx-open">Open editor</button>
@@ -494,6 +503,19 @@ export const DASHBOARD_HTML = `<!doctype html>
       }
     });
 
+    document.getElementById("wh-save").addEventListener("click", async function () {
+      var u = document.getElementById("wh-url").value.trim();
+      if (!u) return;
+      try {
+        var r = await apiSend("/v1/webhook", "PUT", { url: u });
+        set("wh-status", "armed from t" + r.armed_from_tick + " — breakthroughs, verdicts, hails, decodes, runaways");
+        document.getElementById("wh-url").value = "";
+      } catch (e) { set("wh-status", "arm failed: " + e.message); }
+    });
+    document.getElementById("wh-clear").addEventListener("click", async function () {
+      try { await apiSend("/v1/webhook", "DELETE"); set("wh-status", "disarmed"); }
+      catch (e) { set("wh-status", "disarm failed: " + e.message); }
+    });
     document.getElementById("rx-open").addEventListener("click", async function () {
       try {
         var rules = await api("/v1/reflexes");
@@ -707,6 +729,11 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderSignals(sys.signals);
       renderTrial(sys, self);
       renderStarmap();
+      api("/v1/webhook").then(function (w) {
+        set("wh-status", w.configured
+          ? "armed (" + w.url_tail + ") · failures " + w.failures + (w.disabled ? " · DISABLED — re-arm" : "") + " · last t" + w.last_notified_tick
+          : "not armed — paste a webhook URL to hear the sky");
+      }).catch(function () { /* keep last */ });
 
       lastSelf = self;
       lastSys = sys;

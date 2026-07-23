@@ -37,6 +37,11 @@ const OPENAPI = {
       delete: { summary: "Clear queued orders for a tick (default: next)" },
     },
     "/v1/reflexes": { get: { summary: "List rules" }, put: { summary: "Replace rules (costs AP; instincts locked)" } },
+    "/v1/webhook": {
+      put: { summary: "Arm the Watchtower: https URL (a raw Discord webhook works natively)" },
+      get: { summary: "Watchtower status" },
+      delete: { summary: "Disarm" },
+    },
     "/v1/spec": { get: { summary: "This document" } },
   },
 } as const;
@@ -182,6 +187,12 @@ export default {
       }
       if (req.method === "DELETE") {
         return homeFetch("/orders", { method: "DELETE", body: await req.text(), headers: { "content-type": "application/json" } });
+      }
+    }
+    if (url.pathname === "/v1/webhook") {
+      if (req.method === "GET") return homeFetch("/webhook");
+      if (req.method === "PUT" || req.method === "DELETE") {
+        return homeFetch("/webhook", { method: req.method, body: await req.text(), headers: { "content-type": "application/json" } });
       }
     }
     if (url.pathname === "/v1/reflexes") {
