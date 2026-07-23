@@ -623,8 +623,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("sect-join").addEventListener("click", async function () {
       try {
         var all = await api("/v1/sects");
-        var names = all.sects.map(function (x) { return x.name + " (" + x.members + " @ " + x.hall + ")"; }).join("\n");
-        var nm = window.prompt("Banners flying:\n" + (names || "— none —") + "\n\nJoin which?");
+        var names = all.sects.map(function (x) { return x.name + " (" + x.members + " @ " + x.hall + ")"; }).join("\\n");
+        var nm = window.prompt("Banners flying:\\n" + (names || "— none —") + "\\n\\nJoin which?");
         if (!nm) return;
         await apiSend("/v1/sect", "POST", { action: "join", name: nm.trim().toLowerCase() });
         refresh();

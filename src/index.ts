@@ -64,6 +64,9 @@ export default {
 
     if (url.pathname === "/healthz") return json({ ok: true, tick: currentTick(env) });
     if (url.pathname === "/v1/spec") return json(OPENAPI);
+    if (req.method === "GET" && url.pathname === "/favicon.ico") {
+      return new Response(null, { status: 204 });
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
       return new Response(DASHBOARD_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
     }
