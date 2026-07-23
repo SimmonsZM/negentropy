@@ -97,9 +97,12 @@ export class SystemDO {
       await this.ctx.storage.put(`snap:${t}`, snap);
       await this.ctx.storage.delete(`snap:${t - SNAPSHOT_RING}`);
 
-      // Drain this tick's emissions to their destination DOs (M2a: rare beacon
-      // pulses across <=4 lanes — sequential awaits are fine at this scale).
+      // Drain this tick's emissions — but only mail that can still ARRIVE.
+      // During deep catch-up, pulses whose deliver_at already passed are light
+      // that swept through the neighbor unheard; skipping them keeps first-contact
+      // under the free tier's subrequest cap and makes catch-up retry-safe.
       for (const env of p.sim.outbox) {
+        if (env.deliver_at < toTick) continue; // that light has passed
         const stub = this.env.SYSTEM_DO.get(this.env.SYSTEM_DO.idFromName(env.to));
         await stub.fetch(`https://do/deliver?sys=${env.to}`, {
           method: "POST",
@@ -108,6 +111,10 @@ export class SystemDO {
         });
       }
       p.sim.outbox = [];
+
+      // Durability: persist progress periodically so a mid-catch-up crash
+      // resumes instead of restarting (deliveries are idempotent, see /deliver).
+      if (t % 48 === 0) await this.ctx.storage.put("p", p);
     }
     await this.ctx.storage.put("p", p);
   }
@@ -134,12 +141,18 @@ export class SystemDO {
       if (!env || typeof env.deliver_at !== "number" || typeof env.from !== "string") {
         return json({ error: "invalid envelope" }, 400);
       }
+      // Idempotent delivery: a retried catch-up may re-send the same pulse.
+      const dup =
+        p.inbox.some((e) => e.from === env.from && e.emitted_t === env.emitted_t) ||
+        p.sim.receivedSignals.some((s) => s.from === env.from && s.emitted_t === env.emitted_t);
+      if (dup) return json({ delivered_to: p.systemId, duplicate: true });
       if (env.deliver_at <= p.sim.tick) {
         // Defensive clamp: with MIN_LANE_LAG >= 2 and cron-synced clocks this
-        // should be unreachable; if it fires, we deliver at the next tick and log.
+        // should be unreachable; if it fires, we deliver at the next tick.
         env.deliver_at = p.sim.tick + 1;
       }
       p.inbox.push(env);
+      if (p.inbox.length > 64) p.inbox.splice(0, p.inbox.length - 64); // bounded, oldest first out
       await this.ctx.storage.put("p", p);
       return json({ delivered_to: p.systemId, deliver_at: env.deliver_at });
     }
