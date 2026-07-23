@@ -282,6 +282,19 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div id="log"></div>
       </div>
       <div class="card wide" style="margin-top:16px;">
+        <h2>The Exchange — posted to the sky</h2>
+        <div class="ctl">
+          <select id="bk-side" style="background:var(--panel2); color:var(--ink); border:1px solid var(--edge); border-radius:8px; padding:7px;"><option value="ask">ask (sell)</option><option value="bid">bid (buy)</option></select>
+          <select id="bk-good" style="background:var(--panel2); color:var(--ink); border:1px solid var(--edge); border-radius:8px; padding:7px;"><option value="alloy">alloy</option><option value="isotopes">isotopes</option></select>
+          <input id="bk-qty" type="number" min="1" max="500" value="5" style="width:80px; background:var(--panel2); color:var(--ink); border:1px solid var(--edge); border-radius:8px; padding:7px;" />
+          <input id="bk-price" type="number" min="1" max="100000" value="20000" title="milli-eu per unit" style="width:110px; background:var(--panel2); color:var(--ink); border:1px solid var(--edge); border-radius:8px; padding:7px;" />
+          <button class="btn" id="bk-place">Place <span class="pill">1 AP · escrowed</span></button>
+        </div>
+        <div class="sub">price is milli-eu per unit · asks lock goods, bids commit eu (it still leaks)</div>
+        <div id="bk-own" style="margin-top:8px; font-size:12px;"><div>— nothing resting —</div></div>
+        <div id="bk-neighbors" style="margin-top:10px; font-size:12px;"></div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
         <h2>Starmap — neighbors, as they were</h2>
         <div id="starmap"><div>— scanning —</div></div>
       </div>
@@ -517,6 +530,14 @@ export const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("h-repair").addEventListener("click", function () {
       stageOrder({ kind: "repair_systems" }, "repair_systems (100 eu)", 2);
     });
+    document.getElementById("bk-place").addEventListener("click", function () {
+      var side = document.getElementById("bk-side").value;
+      var good = document.getElementById("bk-good").value;
+      var qty = Number(document.getElementById("bk-qty").value);
+      var price = Number(document.getElementById("bk-price").value);
+      if (qty > 0 && price > 0) stageOrder({ kind: "place_order", side: side, good: good, qty: qty, price_milli: price },
+        side + " " + qty + " " + good + " @ " + price, 1);
+    });
     document.getElementById("h-migrate").addEventListener("click", function () {
       stageOrder({ kind: "begin_migration" }, "BEGIN THE MIGRATION (400 eu)", 10);
     });
@@ -627,6 +648,58 @@ export const DASHBOARD_HTML = `<!doctype html>
       }
       box.appendChild(e);
     });
+  }
+
+  async function renderExchange() {
+    try {
+      var own = await api("/v1/book");
+      var box = document.getElementById("bk-own");
+      box.innerHTML = "";
+      if (!own.book.length) { box.innerHTML = "<div>— nothing resting — committed " + (own.committed_eu || 0) + " eu</div>"; }
+      own.book.forEach(function (b) {
+        var r = document.createElement("div");
+        r.className = "sigrow";
+        var sp = document.createElement("span");
+        sp.textContent = "#" + b.id + "  " + b.side + " " + b.qty + " " + b.good + " @ " + b.price_milli + " milli-eu";
+        r.appendChild(sp);
+        var x = document.createElement("button");
+        x.className = "btn ghost";
+        x.textContent = "cancel · 1 AP";
+        x.addEventListener("click", function () { stageOrder({ kind: "cancel_order", order_id: b.id }, "cancel #" + b.id, 1); });
+        r.appendChild(x);
+        box.appendChild(r);
+      });
+      var nb = document.getElementById("bk-neighbors");
+      nb.innerHTML = "";
+      var map = await api("/v1/map");
+      for (var i = 0; i < map.neighbors.length; i++) {
+        (function (n) {
+          api("/v1/systems/" + n.id + "/book").then(function (v) {
+            if (!v.book || !v.book.length) return;
+            var hdr = document.createElement("div");
+            hdr.textContent = n.id + " — as of t" + v.as_of_tick + " (" + v.lag_ticks + " ticks stale):";
+            nb.appendChild(hdr);
+            v.book.forEach(function (b) {
+              var r = document.createElement("div");
+              r.className = "sigrow";
+              var sp = document.createElement("span");
+              sp.textContent = "  #" + b.id + "  " + b.side + " " + b.qty + " " + b.good + " @ " + b.price_milli;
+              r.appendChild(sp);
+              var f = document.createElement("button");
+              f.className = "btn";
+              f.textContent = (b.side === "ask" ? "lift" : "hit") + " · 2 AP";
+              f.addEventListener("click", function () {
+                var q = Number(window.prompt("Fill how many of #" + b.id + " (" + b.side + " " + b.qty + " " + b.good + " @ " + b.price_milli + ")? Your escrow rides the light; stale terms bounce.") || 0);
+                if (q > 0) stageOrder({ kind: "fill_order", system: n.id, order_id: b.id, qty: q, side: b.side, good: b.good, price_milli: b.price_milli },
+                  "fill " + n.id + " #" + b.id + " ×" + q, 2);
+              });
+              r.appendChild(f);
+              nb.appendChild(r);
+            });
+          }).catch(function () { /* faint */ });
+        })(map.neighbors[i]);
+      }
+    } catch (e) { /* keep last */ }
   }
 
   async function renderStarmap() {
@@ -778,6 +851,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderLog(sys.log_tail);
       renderSignals(sys.signals);
       renderTrial(sys, self);
+      renderExchange();
       var fcard = document.getElementById("foresight-card");
       if (sys.realm === "foundation") {
         fcard.classList.remove("hidden");

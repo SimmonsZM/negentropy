@@ -19,7 +19,7 @@ export function genesisState(): SimState {
     metricsPrev: {},
     ruleMeta: {},
     log: ["[t0] genesis — a cold rock, a dim star, a mind that persists"],
-    ledger: { tick: 0, intake_eu: 0, dStore_eu: 0, heatRadiated_eu: 0, dHeatBank_eu: 0, built_eu: 0, flare: false },
+    ledger: { tick: 0, intake_eu: 0, dStore_eu: 0, heatRadiated_eu: 0, dHeatBank_eu: 0, built_eu: 0, transmitted_eu: 0, flare: false },
     stage: "survive",
     positiveStreak: 0,
     receivedSignals: [],
@@ -36,6 +36,9 @@ export function genesisState(): SimState {
     flareRing: [],
     calibration: { n: 0, total_milli: 0 },
     stock: { isotopes: 0, alloy: 0 },
+    book: [],
+    bookSeq: 0,
+    committedEu: 0,
     burnActive: false,
   };
 }

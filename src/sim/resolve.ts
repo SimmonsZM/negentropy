@@ -8,9 +8,9 @@
 import {
   AP_BANK_CAP, AP_PER_TICK, BASE_LOAD_EU, BEACON_INTERVAL_TICKS, BUILD_RADIATOR_EU, ETA_MILLI,
   LEAK_PER_MILLE, MIGRATION_AP, MIGRATION_BAR, MIGRATION_COOLDOWN, MIGRATION_EU, MIGRATION_WINDOW,
-  BUILD_RADIATOR_ALLOY, BURN_FLUX_MULT_MILLI, BURN_ISO_COST, CARGO_MAX_PER_SHIPMENT,
+  BOOK_MAX_OPEN, BOOK_QTY_MAX, BUILD_RADIATOR_ALLOY, BURN_FLUX_MULT_MILLI, BURN_ISO_COST, CARGO_MAX_PER_SHIPMENT,
   FLARE_RING_MAX, FORECAST_MAX_ACTIVE, FORECAST_PTS, FORECAST_WINDOW_MAX, HAIL_MAX_CHARS, ISO_YIELD_DIV,
-  HARMONIZE_COOLDOWN, HARMONIZE_EVENTS, HARMONIZE_WINDOW, ORDER_COST, REFINE_ALLOY_BASE, REFINE_EU,
+  HARMONIZE_COOLDOWN, HARMONIZE_EVENTS, HARMONIZE_WINDOW, ORDER_COST, PRICE_MILLI_MAX, PRICE_MILLI_MIN, REFINE_ALLOY_BASE, REFINE_EU,
   forecastScore, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
@@ -19,7 +19,7 @@ import { evaluate, type Action, type Metrics, type Rule } from "./reflex.js";
 import { achieveBarMet, advanceStage, stageIndex, understandGateMet, TURBULENCE_RECOVERY } from "./stages.js";
 import { getSystem, laneLag, neighborsOf, type SystemDef } from "./starmap.js";
 import {
-  pushLog, type Envelope, type MirrorEnt, type Order, type SimState, type TrialEvent,
+  pushLog, type BookOrder, type Envelope, type FillRequest, type MirrorEnt, type Order, type SimState, type TrialEvent,
 } from "./types.js";
 
 export class ConservationError extends Error {}
@@ -186,7 +186,10 @@ export function resolve(
   let built = 0; // exergy spent on structural orders this tick (builds + repairs + uploads)
   let decodedNew = false; // a foreign beacon was decoded this tick (Connect gate)
   let beginTrial = false;
+  let transmitted = 0; // eu beamed out this tick (fills' escrow legs)
+  let euIn = 0; // eu that arrived via fills — lands AFTER this tick's books close
   const hails: Envelope[] = [];
+  const spendable = () => s.store_eu - s.committedEu;
   let gotHailNew = false;
   let justAscended = false; // the threshold tick belongs to neither climb
 
@@ -205,7 +208,7 @@ export function resolve(
       s.ap -= cost;
       s.structures.radiators.t_rad_milli = Math.max(T_RAD_MIN, Math.min(T_RAD_MAX, o.value_milli));
     } else if (o.kind === "build_radiator") {
-      if (s.store_eu < BUILD_RADIATOR_EU || s.stock.alloy < BUILD_RADIATOR_ALLOY) {
+      if (spendable() < BUILD_RADIATOR_EU || s.stock.alloy < BUILD_RADIATOR_ALLOY) {
         pushLog(s, `[t${t}] build_radiator rejected — needs ${BUILD_RADIATOR_EU} eu + ${BUILD_RADIATOR_ALLOY} alloy (have ${s.store_eu} eu, ${s.stock.alloy} alloy)`);
         continue; // no AP spent on a rejected build
       }
@@ -224,7 +227,7 @@ export function resolve(
         pushLog(s, `[t${t}] repair_systems rejected — heat bank must be clear first (${s.heatBank_eu} eu)`);
         continue;
       }
-      if (s.store_eu < REPAIR_EU) {
+      if (spendable() < REPAIR_EU) {
         pushLog(s, `[t${t}] repair_systems rejected — insufficient exergy (need ${REPAIR_EU}, have ${s.store_eu})`);
         continue;
       }
@@ -269,7 +272,7 @@ export function resolve(
         pushLog(s, `[t${t}] begin_migration rejected — a full tick's AP is required (${MIGRATION_AP})`);
         continue;
       }
-      if (s.store_eu < MIGRATION_EU) {
+      if (spendable() < MIGRATION_EU) {
         pushLog(s, `[t${t}] begin_migration rejected — the upload costs ${MIGRATION_EU} eu (have ${s.store_eu})`);
         continue;
       }
@@ -351,7 +354,7 @@ export function resolve(
       s.harmonize = { startedTick: t, endTick: t + HARMONIZE_WINDOW, events: hEvents, violated: false, netStore: 0 };
       pushLog(s, `[t${t}] HARMONIZE BEGINS — hands off the helm; let the reflexes hold for ${HARMONIZE_WINDOW} ticks`);
     } else if (o.kind === "refine_alloy") {
-      if (s.store_eu < REFINE_EU) {
+      if (spendable() < REFINE_EU) {
         pushLog(s, `[t${t}] refine_alloy rejected — needs ${REFINE_EU} eu (have ${s.store_eu})`);
         continue;
       }
@@ -398,6 +401,92 @@ export function resolve(
         payload: JSON.stringify({ isotopes: iso, alloy: alloyQ }),
       });
       pushLog(s, `[t${t}] shipment away to ${o.to} — ${iso} isotopes, ${alloyQ} alloy, arriving t${t + lag}`);
+    } else if (o.kind === "place_order") {
+      const qty = Math.floor(o.qty);
+      if ((o.side !== "bid" && o.side !== "ask") || (o.good !== "isotopes" && o.good !== "alloy")) {
+        pushLog(s, `[t${t}] place_order rejected — side bid|ask, good isotopes|alloy`);
+        continue;
+      }
+      if (qty < 1 || qty > BOOK_QTY_MAX || o.price_milli < PRICE_MILLI_MIN || o.price_milli > PRICE_MILLI_MAX) {
+        pushLog(s, `[t${t}] place_order rejected — qty 1..${BOOK_QTY_MAX}, price ${PRICE_MILLI_MIN}..${PRICE_MILLI_MAX} milli-eu`);
+        continue;
+      }
+      if (s.book.length >= BOOK_MAX_OPEN) {
+        pushLog(s, `[t${t}] place_order rejected — ${BOOK_MAX_OPEN} orders already resting`);
+        continue;
+      }
+      if (o.side === "ask") {
+        if (s.stock[o.good] < qty) {
+          pushLog(s, `[t${t}] place_order rejected — ask exceeds stock (have ${s.stock[o.good]} ${o.good})`);
+          continue;
+        }
+        s.stock[o.good] -= qty; // the goods sit inside the order
+      } else {
+        const need = Math.floor((qty * o.price_milli) / 1000);
+        if (spendable() < need) {
+          pushLog(s, `[t${t}] place_order rejected — bid needs ${need} eu spendable (have ${spendable()})`);
+          continue;
+        }
+        s.committedEu += need; // committed, not removed: escrow still leaks
+      }
+      s.ap -= cost;
+      s.bookSeq += 1;
+      s.book.push({ id: s.bookSeq, side: o.side, good: o.good, qty, price_milli: o.price_milli, placed_t: t });
+      pushLog(s, `[t${t}] BOOK #${s.bookSeq}: ${o.side} ${qty} ${o.good} @ ${o.price_milli} milli-eu — posted to the sky`);
+    } else if (o.kind === "cancel_order") {
+      const idx = s.book.findIndex((b) => b.id === o.order_id);
+      if (idx < 0) {
+        pushLog(s, `[t${t}] cancel_order rejected — #${o.order_id} not resting here`);
+        continue;
+      }
+      s.ap -= cost;
+      const b = s.book[idx];
+      if (b.side === "ask") s.stock[b.good] += b.qty;
+      else s.committedEu -= Math.floor((b.qty * b.price_milli) / 1000);
+      s.book.splice(idx, 1);
+      pushLog(s, `[t${t}] BOOK #${b.id} cancelled — escrow returned`);
+    } else if (o.kind === "fill_order") {
+      const lag = laneLag(sys.id, o.system);
+      if (lag === undefined) {
+        pushLog(s, `[t${t}] fill_order rejected — no lane to ${o.system}`);
+        continue;
+      }
+      const qty = Math.floor(o.qty);
+      if (qty < 1 || qty > BOOK_QTY_MAX || (o.good !== "isotopes" && o.good !== "alloy")) {
+        pushLog(s, `[t${t}] fill_order rejected — qty 1..${BOOK_QTY_MAX}, good isotopes|alloy`);
+        continue;
+      }
+      // You fill against LIGHT-LAGGED belief. Escrow travels with the intent.
+      const escrow: FillRequest["escrow"] = {};
+      if (o.side === "ask") {
+        // Lifting their ask: you send eu, they send goods.
+        const pay = Math.floor((qty * o.price_milli) / 1000);
+        if (pay < 1 || spendable() < pay) {
+          pushLog(s, `[t${t}] fill_order rejected — lifting that ask needs ${pay} eu spendable (have ${spendable()})`);
+          continue;
+        }
+        s.store_eu -= pay;
+        transmitted += pay;
+        escrow.eu = pay;
+      } else {
+        // Hitting their bid: you send goods, they release committed eu.
+        if (s.stock[o.good] < qty) {
+          pushLog(s, `[t${t}] fill_order rejected — hitting that bid needs ${qty} ${o.good} (have ${s.stock[o.good]})`);
+          continue;
+        }
+        s.stock[o.good] -= qty;
+        escrow[o.good] = qty;
+      }
+      s.ap -= cost;
+      const freq: FillRequest = {
+        orderId: o.order_id, qty, side: o.side, good: o.good, price_milli: o.price_milli,
+        escrow, replyTo: sys.id,
+      };
+      hails.push({
+        from: sys.id, to: o.system, kind: "fill", emitted_t: t, deliver_at: t + lag,
+        payload: JSON.stringify(freq),
+      });
+      pushLog(s, `[t${t}] FILL away to ${o.system} — ${o.side === "ask" ? "lifting" : "hitting"} #${o.order_id} for ${qty} ${o.good} @ ${o.price_milli} · escrow rides the light`);
     }
   }
 
@@ -417,6 +506,64 @@ export function resolve(
   }
 
   // ---- Production + thermodynamics (books must balance) ----
+  // ---- Phase 4: the Exchange — arrived fills settle or bounce (M2g) ----
+  // A fill is a belief that traveled: validated here against the REAL order.
+  // Any mismatch — gone, wrong side, wrong good, price moved, qty short —
+  // bounces the escrow home as cargo. Staleness costs a round trip.
+  for (const env of inboxDue) {
+    if (env.kind !== "fill") continue;
+    let fr: FillRequest | null = null;
+    try { fr = JSON.parse(env.payload) as FillRequest; } catch { /* dust */ }
+    if (!fr) continue;
+    const back = laneLag(sys.id, fr.replyTo) ?? 2;
+    const bounce = (why: string) => {
+      pushLog(s, `[t${t}] FILL #${fr!.orderId} from ${fr!.replyTo} BOUNCED — ${why}`);
+      hails.push({
+        from: sys.id, to: fr!.replyTo, kind: "cargo", emitted_t: t, deliver_at: t + back,
+        payload: JSON.stringify({ eu: fr!.escrow.eu ?? 0, isotopes: fr!.escrow.isotopes ?? 0, alloy: fr!.escrow.alloy ?? 0 }),
+      });
+    };
+    const idx = s.book.findIndex((b) => b.id === fr!.orderId);
+    if (idx < 0) { bounce("order gone"); continue; }
+    const b = s.book[idx];
+    if (b.side !== fr.side || b.good !== fr.good) { bounce("terms mismatch"); continue; }
+    if (b.price_milli !== fr.price_milli) { bounce(`price moved (now ${b.price_milli})`); continue; }
+    if (b.qty < fr.qty) { bounce(`only ${b.qty} remain`); continue; }
+
+    if (b.side === "ask") {
+      // They lifted our ask with eu: goods leave the order, eu is theirs-sent.
+      const expect = Math.floor((fr.qty * b.price_milli) / 1000);
+      if ((fr.escrow.eu ?? 0) < expect) { bounce("escrow short"); continue; }
+      b.qty -= fr.qty;
+      euIn += fr.escrow.eu ?? 0; // inbound eu is next-books money — credited after the ledger closes
+      hails.push({
+        from: sys.id, to: fr.replyTo, kind: "cargo", emitted_t: t, deliver_at: t + back,
+        payload: JSON.stringify({ [b.good]: fr.qty }),
+      });
+      pushLog(s, `[t${t}] BOOK #${b.id} FILLED by ${fr.replyTo}: ${fr.qty} ${b.good} @ ${b.price_milli} — +${fr.escrow.eu} eu, goods away`);
+    } else {
+      // They hit our bid with goods: committed eu releases and beams to them.
+      const goodsIn = fr.escrow[b.good] ?? 0;
+      if (goodsIn < fr.qty) { bounce("escrow short"); continue; }
+      const pay = Math.floor((fr.qty * b.price_milli) / 1000);
+      b.qty -= fr.qty;
+      s.committedEu -= pay;
+      s.store_eu -= pay;
+      transmitted += pay;
+      s.stock[b.good] += goodsIn;
+      hails.push({
+        from: sys.id, to: fr.replyTo, kind: "cargo", emitted_t: t, deliver_at: t + back,
+        payload: JSON.stringify({ eu: pay }),
+      });
+      pushLog(s, `[t${t}] BOOK #${b.id} FILLED by ${fr.replyTo}: ${fr.qty} ${b.good} @ ${b.price_milli} — goods in, ${pay} eu away`);
+    }
+    if (b.qty === 0) {
+      s.book.splice(idx, 1);
+      pushLog(s, `[t${t}] BOOK #${b.id} closed — fully filled`);
+    }
+  }
+
+
   const playerMods = s.burnActive
     ? { ...mods, fluxMult_milli: Math.floor((mods.fluxMult_milli * BURN_FLUX_MULT_MILLI) / 1000) }
     : mods;
@@ -453,9 +600,9 @@ export function resolve(
   // ---- Conservation invariant (anti-cheat is physics, GDD §12.0) ----
   const dStore = s.store_eu - store0;
   const dBank = s.heatBank_eu - bank0;
-  if (out.intake_eu !== dStore + out.radiated_eu + dBank + built) {
+  if (out.intake_eu !== dStore + out.radiated_eu + dBank + built + transmitted) {
     throw new ConservationError(
-      `t${t}: intake=${out.intake_eu} ≠ dStore=${dStore} + radiated=${out.radiated_eu} + dBank=${dBank} + built=${built}`,
+      `t${t}: intake=${out.intake_eu} ≠ dStore=${dStore} + radiated=${out.radiated_eu} + dBank=${dBank} + built=${built} + transmitted=${transmitted}`,
     );
   }
 
@@ -466,9 +613,11 @@ export function resolve(
     heatRadiated_eu: out.radiated_eu,
     dHeatBank_eu: dBank,
     built_eu: built,
+    transmitted_eu: transmitted,
     flare,
   };
   if (flare) pushLog(s, `[t${t}] stellar flare (flux x3)`);
+  if (euIn > 0) s.store_eu += euIn; // inbound settlements: next-books money, like all cargo
 
   // ---- Trial phase (M2b): the mirror walks the same sky ----
   if (beginTrial) {
@@ -604,20 +753,21 @@ export function resolve(
     }
   }
 
-  // ---- Phase 4: markets — M2c ----
-
   // ---- Phase 5: dispatch — light-lagged mail in, beacon pulses out (M2a) ----
   for (const env of inboxDue) {
+    if (env.kind === "fill") continue; // consumed by the Exchange in phase 4
     if (env.kind === "cargo") {
-      let iso = 0, alloyIn = 0;
+      let iso = 0, alloyIn = 0, euCargo = 0;
       try {
-        const c = JSON.parse(env.payload) as { isotopes?: number; alloy?: number };
+        const c = JSON.parse(env.payload) as { isotopes?: number; alloy?: number; eu?: number };
         iso = Math.max(0, Math.floor(c.isotopes ?? 0));
         alloyIn = Math.max(0, Math.floor(c.alloy ?? 0));
+        euCargo = Math.max(0, Math.floor(c.eu ?? 0));
       } catch { /* malformed cargo arrives as dust */ }
       s.stock.isotopes += iso;
       s.stock.alloy += alloyIn;
-      pushLog(s, `[t${t}] CARGO from ${env.from} (${t - env.emitted_t} ticks in flight): +${iso} isotopes, +${alloyIn} alloy`);
+      s.store_eu += euCargo; // post-ledger: next-books money
+      pushLog(s, `[t${t}] CARGO from ${env.from} (${t - env.emitted_t} ticks in flight): +${iso} isotopes, +${alloyIn} alloy${euCargo ? `, +${euCargo} eu` : ""}`);
       continue;
     }
     s.receivedSignals.push({

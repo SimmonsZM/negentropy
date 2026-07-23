@@ -160,7 +160,29 @@ export default {
       });
     }
 
+    if (req.method === "GET" && url.pathname === "/v1/book") {
+      const r = await homeFetch("/state");
+      const { sim } = (await r.json()) as any;
+      return json({ tick: sim.tick, book: sim.book ?? [], committed_eu: sim.committedEu ?? 0 });
+    }
+
     // Light-lagged observation of a neighbor: you see them as they WERE.
+    const bookMatch = url.pathname.match(/^\/v1\/systems\/([a-z0-9-]+)\/book$/);
+    if (req.method === "GET" && bookMatch) {
+      const id = bookMatch[1];
+      const sys = getSystem(id);
+      if (!sys) return json({ error: "unknown system" }, 404);
+      const lag = laneLag(HOME, id);
+      if (lag === undefined) return json({ error: "too faint — no direct lane" }, 404);
+      const asOf = t - lag;
+      const target = stubFor(env, id);
+      await target.fetch(`https://do/state?sys=${id}&toTick=${t}`);
+      const snapR = await target.fetch(`https://do/snapshot?sys=${id}&at=${asOf}`);
+      if (snapR.status !== 200) return json({ error: "too faint — that light has passed" }, 404);
+      const snap = (await snapR.json()) as any;
+      return json({ system: id, lag_ticks: lag, as_of_tick: asOf, book: snap.book ?? [] });
+    }
+
     const sysMatch = url.pathname.match(/^\/v1\/systems\/([a-z0-9-]+)$/);
     if (req.method === "GET" && sysMatch) {
       const id = sysMatch[1];

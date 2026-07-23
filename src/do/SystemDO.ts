@@ -36,6 +36,7 @@ interface PublicView {
   phase_angle: number;
   radiated_eu: number;
   flare: boolean;
+  book: Array<{ id: number; side: string; good: string; qty: number; price_milli: number }>; // posted prices are broadcast
 }
 
 interface Persisted {
@@ -69,6 +70,11 @@ export class SystemDO {
       if (p.sim.forecastSeq === undefined) { p.sim.forecastSeq = 0; repaired = true; }
       if (p.sim.flareRing === undefined) { p.sim.flareRing = []; repaired = true; }
       if (p.sim.calibration === undefined) { p.sim.calibration = { n: 0, total_milli: 0 }; repaired = true; }
+      if (p.sim.stock === undefined) { p.sim.stock = { isotopes: 0, alloy: 0 }; repaired = true; }
+      if (p.sim.burnActive === undefined) { p.sim.burnActive = false; repaired = true; }
+      if (p.sim.book === undefined) { p.sim.book = []; repaired = true; }
+      if (p.sim.bookSeq === undefined) { p.sim.bookSeq = 0; repaired = true; }
+      if (p.sim.committedEu === undefined) { p.sim.committedEu = 0; repaired = true; }
       if (p.sim.verbsUsed === undefined) { p.sim.verbsUsed = []; repaired = true; }
       if (p.sim.sentHail === undefined) { p.sim.sentHail = false; repaired = true; }
       if (p.sim.gotHail === undefined) { p.sim.gotHail = false; repaired = true; }
@@ -122,6 +128,7 @@ export class SystemDO {
         phase_angle: p.sim.phaseAngle,
         radiated_eu: p.sim.ledger.heatRadiated_eu,
         flare: p.sim.ledger.flare,
+        book: p.sim.book.map((b) => ({ id: b.id, side: b.side, good: b.good, qty: b.qty, price_milli: b.price_milli })),
       };
       await this.ctx.storage.put(`snap:${t}`, snap);
       await this.ctx.storage.delete(`snap:${t - SNAPSHOT_RING}`);

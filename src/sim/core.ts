@@ -20,6 +20,9 @@ export const ORDER_COST: Record<string, number> = {
   refine_alloy: 2,
   send_shipment: 2,
   burn_isotopes: 1,
+  place_order: 1,
+  cancel_order: 1,
+  fill_order: 2,
   begin_harmonize: 2,
   noop: 0,
 };
@@ -62,6 +65,12 @@ export const REFINE_ALLOY_BASE = 10; // alloy out at metallicity 1000
 export const BURN_ISO_COST = 25; // burn_isotopes: fusion-assist fuel
 export const BURN_FLUX_MULT_MILLI = 1500; // this tick's flux x1.5
 export const CARGO_MAX_PER_SHIPMENT = 500; // per good
+
+// ---- The Exchange (M2g): order books + light-lagged escrow ----
+export const BOOK_MAX_OPEN = 8; // open orders per system book
+export const BOOK_QTY_MAX = 500;
+export const PRICE_MILLI_MIN = 1; // milli-eu per unit
+export const PRICE_MILLI_MAX = 100000;
 
 /** Proper log score, integer-only: points = round(1000·log2(2p)).
  * p_milli must be one of the table keys (50..950 step 50). If the claim is

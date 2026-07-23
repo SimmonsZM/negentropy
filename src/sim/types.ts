@@ -11,6 +11,29 @@ export interface Structures {
 /** Seeded trial perturbation — conservation-clean by construction: each type
  * only reshapes flows the ledger already balances (flux is external; eta
  * redistributes intake between store and heat; a faulted panel reduces D). */
+/** One resting order on a system's public book. Asks hold the goods inside
+ * the order; bids hold eu by COMMITMENT (still in store, still leaking). */
+export interface BookOrder {
+  id: number;
+  side: "bid" | "ask";
+  good: "isotopes" | "alloy";
+  qty: number;
+  price_milli: number; // milli-eu per unit
+  placed_t: number;
+}
+
+/** A fill traveling down a lane: the filler's escrow rides WITH the intent.
+ * If the order died before this light arrived, the escrow bounces home. */
+export interface FillRequest {
+  orderId: number;
+  qty: number;
+  side: "bid" | "ask"; // the side the filler BELIEVES the resting order is
+  good: "isotopes" | "alloy";
+  price_milli: number; // the price the filler believes — mismatch bounces
+  escrow: { eu?: number; isotopes?: number; alloy?: number };
+  replyTo: string; // system id for settlement or bounce
+}
+
 export interface TrialEvent {
   tick: number;
   kind: "flare_echo" | "impurity" | "panel_fault";
@@ -58,6 +81,7 @@ export interface Ledger {
   heatRadiated_eu: number;
   dHeatBank_eu: number;
   built_eu: number;
+  transmitted_eu: number; // exergy beamed down a lane this tick (M2g)
   flare: boolean;
 }
 
@@ -66,10 +90,10 @@ export interface Ledger {
 export interface Envelope {
   from: string; // system id
   to: string; // system id
-  kind: "beacon" | "hail" | "cargo";
+  kind: "beacon" | "hail" | "cargo" | "fill";
   emitted_t: number;
   deliver_at: number;
-  payload: string; // cargo: JSON {isotopes, alloy}
+  payload: string; // cargo: JSON {isotopes?, alloy?, eu?}; fill: JSON FillRequest
   seq?: number; // per-tick outbox index — dedupe key includes it, so two
                 // shipments (or hails) on one lane in one tick both arrive
 }
@@ -112,6 +136,9 @@ export interface SimState {
   flareRing: number[]; // recent flare ticks, capped, for claim resolution
   calibration: { n: number; total_milli: number };
   stock: { isotopes: number; alloy: number }; // Substance (M2f)
+  book: BookOrder[]; // The Exchange (M2g): this system's public order book
+  bookSeq: number;
+  committedEu: number; // eu locked under open bids — spendable = store − committed
   burnActive: boolean; // fusion-assist armed for THIS tick's production
   trial?: TrialState; // active tribulation, if any
   migrationCooldownUntil: number; // tick before which a new attempt is refused
@@ -130,6 +157,9 @@ export type Order =
   | { kind: "refine_alloy" }
   | { kind: "send_shipment"; to: string; isotopes?: number; alloy?: number }
   | { kind: "burn_isotopes" }
+  | { kind: "place_order"; side: "bid" | "ask"; good: "isotopes" | "alloy"; qty: number; price_milli: number }
+  | { kind: "cancel_order"; order_id: number }
+  | { kind: "fill_order"; system: string; order_id: number; qty: number; side: "bid" | "ask"; good: "isotopes" | "alloy"; price_milli: number }
   | { kind: "noop" };
 
 export const LOG_MAX = 200;
