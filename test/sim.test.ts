@@ -48,11 +48,9 @@ describe("M1 acceptance: AP economy", () => {
     expect(s.ap).toBe(AP_BANK_CAP); // banked while idle, capped
 
     s.store_eu = 1_000_000; // isolate the AP constraint from the 150-eu build cost
-    const spendy: Order[] = Array.from({ length: 12 }, () => ({ kind: "build_radiator" }));
-    const before = s.structures.radiators.panels;
-    s = resolve(s, spendy, RULES, SEED); // 33 AP wanted, 40-30 available → some rejected
-    const built = s.structures.radiators.panels - before;
-    expect(built).toBeLessThan(12);
+    const spendy: Order[] = Array.from({ length: 40 }, () => ({ kind: "set_radiator_temp", value_milli: 1000 } as Order));
+    s = resolve(s, spendy, RULES, SEED); // 40 AP wanted, 40 available at most → some rejected
+
     expect(s.ap).toBeGreaterThanOrEqual(0);
     expect(s.log.join("\n")).toContain("order rejected (AP)");
   });
@@ -76,12 +74,14 @@ describe("M1 acceptance: reflexes", () => {
 describe("M1.5: build cost + conservation with built_eu", () => {
   it("a build books 150 eu to built_eu and the extended invariant still holds", () => {
     let s = genesisState();
-    for (let t = 1; t <= 4; t++) s = resolve(s, [], RULES, SEED); // warm the store past 150
+    s.stock.alloy = 2; // Substance (M2f): panels are matter now — refined elsewhere for this test
+    for (let t = 1; t <= 4; t++) s = resolve(s, [], RULES, SEED); // warm the store past the eu component
     const panelsBefore = s.structures.radiators.panels;
     const storeBefore = s.store_eu;
     expect(storeBefore).toBeGreaterThan(BUILD_RADIATOR_EU);
 
     s = resolve(s, [{ kind: "build_radiator" }], RULES, SEED);
+    expect(s.stock.alloy).toBe(0); // both ingots into the panel
     const L = s.ledger;
 
     expect(s.structures.radiators.panels).toBe(panelsBefore + 1);
@@ -89,15 +89,15 @@ describe("M1.5: build cost + conservation with built_eu", () => {
     expect(L.intake_eu).toBe(L.dStore_eu + L.heatRadiated_eu + L.dHeatBank_eu + L.built_eu);
   });
 
-  it("rejects a build with insufficient exergy, logs it, and spends no AP", () => {
+  it("rejects a build without matter, logs the full bill, and spends no AP", () => {
     let s = genesisState();
-    s.store_eu = 100; // below the 150-eu build cost
+    // Plenty of exergy, zero alloy: the rejection names both ingredients.
     const apBefore = s.ap;
     const panelsBefore = s.structures.radiators.panels;
     s = resolve(s, [{ kind: "build_radiator" }], RULES, SEED);
     expect(s.structures.radiators.panels).toBe(panelsBefore);
-    expect(s.ap).toBe(apBefore + 10); // only the +10/tick accrual, build cost refunded
-    expect(s.log.join("\n")).toContain("build_radiator rejected — insufficient exergy");
+    expect(s.ap).toBe(apBefore + 10); // only the +10/tick accrual, no cost taken
+    expect(s.log.join("\n")).toContain("build_radiator rejected — needs 50 eu + 2 alloy");
   });
 });
 

@@ -10,7 +10,7 @@ const SEED = seedFrom("negentropy-season-0", "wei-9-home");
 const RULES = defaultInstincts();
 
 function readyState(): SimState {
-  const s: SimState = { ...genesisState(), stage: "control", store_eu: 3000 };
+  const s: SimState = { ...genesisState(), stage: "achieve", store_eu: 3000 };
   s.structures.radiators.panels = 20;
   s.structures.collectors.throttle_milli = 300;
   return s;
@@ -26,7 +26,7 @@ describe("The Migration: eligibility", () => {
     let s: SimState = { ...readyState(), stage: "survive" };
     s = resolve(s, [{ kind: "begin_migration" }], RULES, SEED);
     expect(s.trial).toBeUndefined();
-    expect(s.log.join("\n")).toContain("reach Control (3/9) first");
+    expect(s.log.join("\n")).toContain("reach Achieve (5/9) first");
 
     s = { ...readyState(), store_eu: 100 };
     s = resolve(s, [{ kind: "begin_migration" }], RULES, SEED);

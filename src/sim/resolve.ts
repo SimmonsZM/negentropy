@@ -8,13 +8,15 @@
 import {
   AP_BANK_CAP, AP_PER_TICK, BASE_LOAD_EU, BEACON_INTERVAL_TICKS, BUILD_RADIATOR_EU, ETA_MILLI,
   LEAK_PER_MILLE, MIGRATION_AP, MIGRATION_BAR, MIGRATION_COOLDOWN, MIGRATION_EU, MIGRATION_WINDOW,
-  FLARE_RING_MAX, FORECAST_MAX_ACTIVE, FORECAST_PTS, FORECAST_WINDOW_MAX, HAIL_MAX_CHARS, ORDER_COST,
+  BUILD_RADIATOR_ALLOY, BURN_FLUX_MULT_MILLI, BURN_ISO_COST, CARGO_MAX_PER_SHIPMENT,
+  FLARE_RING_MAX, FORECAST_MAX_ACTIVE, FORECAST_PTS, FORECAST_WINDOW_MAX, HAIL_MAX_CHARS, ISO_YIELD_DIV,
+  HARMONIZE_COOLDOWN, HARMONIZE_EVENTS, HARMONIZE_WINDOW, ORDER_COST, REFINE_ALLOY_BASE, REFINE_EU,
   forecastScore, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
 } from "./core.js";
 import { evaluate, type Action, type Metrics, type Rule } from "./reflex.js";
-import { advanceStage } from "./stages.js";
+import { achieveBarMet, advanceStage, stageIndex, understandGateMet, TURBULENCE_RECOVERY } from "./stages.js";
 import { getSystem, laneLag, neighborsOf, type SystemDef } from "./starmap.js";
 import {
   pushLog, type Envelope, type MirrorEnt, type Order, type SimState, type TrialEvent,
@@ -144,10 +146,22 @@ export function resolve(
   if (s.forecasts.length > 32) s.forecasts.splice(0, s.forecasts.length - 32); // keep recent history only
 
   const trialActive = !!s.trial && t > s.trial.startedTick && t <= s.trial.endTick;
-  const mods = trialActive ? trialModsFor(s.trial!.events, t) : CALM;
+  const harmActive = !!s.harmonize && t > s.harmonize.startedTick && t <= s.harmonize.endTick;
+  const mods = trialActive ? trialModsFor(s.trial!.events, t)
+    : harmActive ? trialModsFor(s.harmonize!.events, t)
+    : CALM;
   if (trialActive) {
     for (const ev of s.trial!.events) {
       if (ev.tick === t) pushLog(s, `[t${t}] TRIAL EVENT — ${EVENT_NAMES[ev.kind]}`);
+    }
+  }
+  if (harmActive) {
+    for (const ev of s.harmonize!.events) {
+      if (ev.tick === t) pushLog(s, `[t${t}] HARMONIZE EVENT — ${EVENT_NAMES[ev.kind]}`);
+    }
+    if (orders.length > 0 && !s.harmonize!.violated) {
+      s.harmonize!.violated = true;
+      pushLog(s, `[t${t}] HARMONIZE VOIDED — a hand touched the helm`);
     }
   }
 
@@ -173,6 +187,7 @@ export function resolve(
   let decodedNew = false; // a foreign beacon was decoded this tick (Connect gate)
   let beginTrial = false;
   const hails: Envelope[] = [];
+  let gotHailNew = false;
   let justAscended = false; // the threshold tick belongs to neither climb
 
   // ---- Phase 3: orders (AP-metered, initiative = submission order) ----
@@ -182,6 +197,7 @@ export function resolve(
       pushLog(s, `[t${t}] order rejected (AP): ${o.kind}`);
       continue;
     }
+    if (o.kind !== "noop" && !s.verbsUsed.includes(o.kind)) s.verbsUsed.push(o.kind);
     if (o.kind === "set_throttle") {
       s.ap -= cost;
       s.structures.collectors.throttle_milli = Math.max(0, Math.min(1000, o.value_milli));
@@ -189,15 +205,16 @@ export function resolve(
       s.ap -= cost;
       s.structures.radiators.t_rad_milli = Math.max(T_RAD_MIN, Math.min(T_RAD_MAX, o.value_milli));
     } else if (o.kind === "build_radiator") {
-      if (s.store_eu < BUILD_RADIATOR_EU) {
-        pushLog(s, `[t${t}] build_radiator rejected — insufficient exergy (need ${BUILD_RADIATOR_EU}, have ${s.store_eu})`);
+      if (s.store_eu < BUILD_RADIATOR_EU || s.stock.alloy < BUILD_RADIATOR_ALLOY) {
+        pushLog(s, `[t${t}] build_radiator rejected — needs ${BUILD_RADIATOR_EU} eu + ${BUILD_RADIATOR_ALLOY} alloy (have ${s.store_eu} eu, ${s.stock.alloy} alloy)`);
         continue; // no AP spent on a rejected build
       }
       s.ap -= cost;
       s.structures.radiators.panels += 1;
       s.store_eu -= BUILD_RADIATOR_EU;
+      s.stock.alloy -= BUILD_RADIATOR_ALLOY;
       built += BUILD_RADIATOR_EU;
-      pushLog(s, `[t${t}] built radiator panel (#${s.structures.radiators.panels}), −${BUILD_RADIATOR_EU} eu`);
+      pushLog(s, `[t${t}] built radiator panel (#${s.structures.radiators.panels}) — ${BUILD_RADIATOR_EU} eu + ${BUILD_RADIATOR_ALLOY} alloy`);
     } else if (o.kind === "repair_systems") {
       if (!s.damaged) {
         pushLog(s, `[t${t}] repair_systems rejected — systems already nominal`);
@@ -232,8 +249,12 @@ export function resolve(
         pushLog(s, `[t${t}] begin_migration rejected — the Migration is already behind you`);
         continue;
       }
-      if (s.stage !== "control") {
-        pushLog(s, `[t${t}] begin_migration rejected — reach Control (3/9) first; the climb precedes the leap`);
+      if (stageIndex(s.stage) < stageIndex("achieve")) {
+        pushLog(s, `[t${t}] begin_migration rejected — reach Achieve (5/9) first; the climb precedes the leap`);
+        continue;
+      }
+      if (s.harmonize) {
+        pushLog(s, `[t${t}] begin_migration rejected — one crucible at a time`);
         continue;
       }
       if (s.trial) {
@@ -269,11 +290,16 @@ export function resolve(
         continue;
       }
       s.ap -= cost;
+      s.sentHail = true;
       hails.push({ from: sys.id, to: o.to, kind: "hail", emitted_t: t, deliver_at: t + lag, payload: text });
       pushLog(s, `[t${t}] hail sent toward ${o.to} — arrives with the light at t${t + lag}`);
     } else if (o.kind === "register_forecast") {
       if (s.realm === "embodied") {
         pushLog(s, `[t${t}] register_forecast rejected — Mirror Sight required (the Migration opens the registry)`);
+        continue;
+      }
+      if (s.turbulence) {
+        pushLog(s, `[t${t}] register_forecast rejected — a shaken heart cannot see clearly (settle first)`);
         continue;
       }
       if (!(o.p_milli in FORECAST_PTS)) {
@@ -300,6 +326,78 @@ export function resolve(
         resolves_t: t + w,
       });
       pushLog(s, `[t${t}] FORECAST REGISTERED #${s.forecastSeq} — "flare within ${w}" @ ${o.p_milli / 10}% · resolves t${t + w}`);
+    } else if (o.kind === "begin_harmonize") {
+      if (s.stage !== "harmonize") {
+        pushLog(s, `[t${t}] begin_harmonize rejected — the crucible opens at Harmonize (7/9)`);
+        continue;
+      }
+      if (s.trial || s.harmonize) {
+        pushLog(s, `[t${t}] begin_harmonize rejected — one crucible at a time`);
+        continue;
+      }
+      if (t < s.harmonizeCooldownUntil) {
+        pushLog(s, `[t${t}] begin_harmonize rejected — cooldown until t${s.harmonizeCooldownUntil}`);
+        continue;
+      }
+      s.ap -= cost;
+      const hSeed = mix(seedKey, t ^ 0x4a4a);
+      const hEvents: TrialEvent[] = [];
+      for (let i = 0; i < HARMONIZE_EVENTS; i++) {
+        const evTick = t + 1 + roll(hSeed, t, 0xa0 + i, HARMONIZE_WINDOW);
+        const kindRoll = roll(hSeed, t, 0xb0 + i, 3);
+        hEvents.push({ tick: evTick, kind: kindRoll === 0 ? "flare_echo" : kindRoll === 1 ? "impurity" : "panel_fault" });
+      }
+      hEvents.sort((a, b) => a.tick - b.tick || (a.kind < b.kind ? -1 : 1));
+      s.harmonize = { startedTick: t, endTick: t + HARMONIZE_WINDOW, events: hEvents, violated: false, netStore: 0 };
+      pushLog(s, `[t${t}] HARMONIZE BEGINS — hands off the helm; let the reflexes hold for ${HARMONIZE_WINDOW} ticks`);
+    } else if (o.kind === "refine_alloy") {
+      if (s.store_eu < REFINE_EU) {
+        pushLog(s, `[t${t}] refine_alloy rejected — needs ${REFINE_EU} eu (have ${s.store_eu})`);
+        continue;
+      }
+      s.ap -= cost;
+      s.store_eu -= REFINE_EU;
+      built += REFINE_EU;
+      const alloyOut = Math.floor((REFINE_ALLOY_BASE * sys.metallicity_milli) / 1000);
+      s.stock.alloy += alloyOut;
+      pushLog(s, `[t${t}] refined ${alloyOut} alloy from ${REFINE_EU} eu (Z ${sys.metallicity_milli}) — matter is embodied work`);
+    } else if (o.kind === "burn_isotopes") {
+      if (s.burnActive) {
+        pushLog(s, `[t${t}] burn_isotopes rejected — the injector is already hot this tick`);
+        continue;
+      }
+      if (s.stock.isotopes < BURN_ISO_COST) {
+        pushLog(s, `[t${t}] burn_isotopes rejected — needs ${BURN_ISO_COST} isotopes (have ${s.stock.isotopes})`);
+        continue;
+      }
+      s.ap -= cost;
+      s.stock.isotopes -= BURN_ISO_COST;
+      s.burnActive = true;
+      pushLog(s, `[t${t}] fusion-assist — ${BURN_ISO_COST} isotopes into the stream, flux x1.5 this tick`);
+    } else if (o.kind === "send_shipment") {
+      const lag = laneLag(sys.id, o.to);
+      if (lag === undefined) {
+        pushLog(s, `[t${t}] send_shipment rejected — no lane from ${sys.id} to ${o.to}`);
+        continue;
+      }
+      const iso = Math.max(0, Math.min(CARGO_MAX_PER_SHIPMENT, Math.floor(o.isotopes ?? 0)));
+      const alloyQ = Math.max(0, Math.min(CARGO_MAX_PER_SHIPMENT, Math.floor(o.alloy ?? 0)));
+      if (iso + alloyQ === 0) {
+        pushLog(s, `[t${t}] send_shipment rejected — an empty hold ships nothing`);
+        continue;
+      }
+      if (s.stock.isotopes < iso || s.stock.alloy < alloyQ) {
+        pushLog(s, `[t${t}] send_shipment rejected — hold exceeds stock (have ${s.stock.isotopes} iso, ${s.stock.alloy} alloy)`);
+        continue;
+      }
+      s.ap -= cost;
+      s.stock.isotopes -= iso;
+      s.stock.alloy -= alloyQ;
+      hails.push({
+        from: sys.id, to: o.to, kind: "cargo", emitted_t: t, deliver_at: t + lag,
+        payload: JSON.stringify({ isotopes: iso, alloy: alloyQ }),
+      });
+      pushLog(s, `[t${t}] shipment away to ${o.to} — ${iso} isotopes, ${alloyQ} alloy, arriving t${t + lag}`);
     }
   }
 
@@ -319,6 +417,10 @@ export function resolve(
   }
 
   // ---- Production + thermodynamics (books must balance) ----
+  const playerMods = s.burnActive
+    ? { ...mods, fluxMult_milli: Math.floor((mods.fluxMult_milli * BURN_FLUX_MULT_MILLI) / 1000) }
+    : mods;
+  s.burnActive = false; // one tick of fire, then it is spent
   const out = thermoTick(
     {
       store_eu: s.store_eu,
@@ -328,15 +430,23 @@ export function resolve(
       t_rad_milli: s.structures.radiators.t_rad_milli,
     },
     flux,
-    mods,
+    playerMods,
     s.damaged,
   );
+  // Isotope byproduct: collectors sieve the stellar wind — flare worlds are
+  // rich, and flares triple the catch (the wind IS the flare).
+  const isoGain = Math.floor((out.intake_eu * sys.flare_per_mille * (flare ? 3 : 1)) / (1000 * ISO_YIELD_DIV));
+  if (isoGain > 0) s.stock.isotopes += isoGain;
   s.store_eu = out.store_eu;
   s.heatBank_eu = out.heatBank_eu;
   if (out.overheatedNow) {
     s.damaged = true;
     s.structures.collectors.throttle_milli = 0;
     pushLog(s, `[t${t}] THERMAL RUNAWAY — systems damaged, collectors offline`);
+    if (!s.turbulence) {
+      s.turbulence = { since: t, recovery: 0 };
+      pushLog(s, `[t${t}] DAO-HEART TURBULENCE — the horizon narrows until you settle`);
+    }
   }
   // Repair is deliberate — a repair_systems order, never automatic.
 
@@ -453,31 +563,72 @@ export function resolve(
           tr.playerWealth < MIGRATION_BAR ? "the bar was not met" :
           "the copy matched you";
         pushLog(s, `[t${t}] THE MIGRATION FAILS — ${why}. The sky closes until t${s.migrationCooldownUntil}.`);
+        if (!s.turbulence) {
+          s.turbulence = { since: t, recovery: 0 };
+          pushLog(s, `[t${t}] DAO-HEART TURBULENCE — the horizon narrows until you settle`);
+        }
       }
       s.trial = undefined;
     }
   }
 
-  // ---- Stage engine: the nine-fold climb's live gates (Deep Dive §14) ----
-  if (!justAscended) {
-    const stageStep = advanceStage(s.stage, s.positiveStreak, { dStore, decodedNew }, t);
-    s.stage = stageStep.stage;
-    s.positiveStreak = stageStep.positiveStreak;
-    if (stageStep.completedLog) pushLog(s, stageStep.completedLog);
+  // ---- Harmonize window accounting + verdict (M2f) ----
+  let harmonizePassed = false;
+  if (harmActive && s.harmonize) {
+    s.harmonize.netStore += dStore;
+    if (t === s.harmonize.endTick) {
+      const h = s.harmonize;
+      const passed = !h.violated && !s.damaged && h.netStore > 0;
+      pushLog(s, `[t${t}] HARMONIZE VERDICT — ${passed ? "the system held itself" : h.violated ? "voided by hand" : s.damaged ? "it broke" : "it bled"} · net ${h.netStore >= 0 ? "+" : ""}${h.netStore} eu`);
+      if (passed) {
+        harmonizePassed = true;
+        pushLog(s, `[t${t}] Sanctify (8/9) lies beyond the veil — a future sky`);
+      } else {
+        s.harmonizeCooldownUntil = t + HARMONIZE_COOLDOWN;
+        if (!s.turbulence) {
+          s.turbulence = { since: t, recovery: 0 };
+          pushLog(s, `[t${t}] DAO-HEART TURBULENCE — the horizon narrows until you settle`);
+        }
+      }
+      s.harmonize = undefined;
+    }
+  }
+
+  // ---- Dao-heart turbulence recovery: 8 clean ticks settle it ----
+  if (s.turbulence) {
+    const stable = dStore >= 0 && !s.damaged;
+    s.turbulence.recovery = stable ? s.turbulence.recovery + 1 : 0;
+    if (s.turbulence.recovery >= TURBULENCE_RECOVERY) {
+      s.turbulence = undefined;
+      pushLog(s, `[t${t}] the dao heart settles — ${TURBULENCE_RECOVERY} clean ticks`);
+    }
   }
 
   // ---- Phase 4: markets — M2c ----
 
   // ---- Phase 5: dispatch — light-lagged mail in, beacon pulses out (M2a) ----
   for (const env of inboxDue) {
+    if (env.kind === "cargo") {
+      let iso = 0, alloyIn = 0;
+      try {
+        const c = JSON.parse(env.payload) as { isotopes?: number; alloy?: number };
+        iso = Math.max(0, Math.floor(c.isotopes ?? 0));
+        alloyIn = Math.max(0, Math.floor(c.alloy ?? 0));
+      } catch { /* malformed cargo arrives as dust */ }
+      s.stock.isotopes += iso;
+      s.stock.alloy += alloyIn;
+      pushLog(s, `[t${t}] CARGO from ${env.from} (${t - env.emitted_t} ticks in flight): +${iso} isotopes, +${alloyIn} alloy`);
+      continue;
+    }
     s.receivedSignals.push({
       from: env.from,
       emitted_t: env.emitted_t,
       received_t: t,
       payload: env.payload,
       decoded: env.kind === "hail", // a mind's hail is already in shared protocol
-      kind: env.kind,
+      kind: env.kind as "beacon" | "hail", // cargo returned above
     });
+    if (env.kind === "hail") { s.gotHail = true; gotHailNew = true; }
     pushLog(s, env.kind === "hail"
       ? `[t${t}] HAIL from ${env.from} (${t - env.emitted_t} ticks in flight): "${env.payload}"`
       : `[t${t}] signal received from ${env.from} (emitted t${env.emitted_t}, ${t - env.emitted_t} ticks in flight)`);
@@ -500,7 +651,49 @@ export function resolve(
     }
     pushLog(s, `[t${t}] ancient beacon pulse — ${emissions.length} lanes`);
   }
-  s.outbox = [...hails, ...emissions];
+  s.outbox = [...hails, ...emissions].map((e, i) => ({ ...e, seq: i }));
+
+  // ---- Stage engine: the nine-fold climb's live gates (Deep Dive §14) ----
+  // Runs after dispatch so same-tick hail arrivals can complete Connect.
+  if (!justAscended) {
+    const snap = {
+      dStore,
+      decodedNew,
+      gotHailNew,
+      verbsUsed: s.verbsUsed.length,
+      decodedCount: s.decodedFrom.length,
+      sentHail: s.sentHail,
+      gotHail: s.gotHail,
+      store: s.store_eu,
+      panels: s.structures.radiators.panels,
+      intake: out.intake_eu,
+      calN: s.calibration.n,
+      calAvg_milli: s.calibration.n ? Math.floor(s.calibration.total_milli / s.calibration.n) : 0,
+      calSpan: 0, // filled below
+      harmonizePassed,
+    };
+    // Calibration span from resolved forecasts still in the window we keep.
+    const resolved = s.forecasts.filter((f) => f.outcome !== undefined);
+    if (resolved.length >= 2) snap.calSpan = resolved[resolved.length - 1].resolves_t - resolved[0].resolves_t;
+
+    const before = s.stage;
+    const stageStep = advanceStage(s.stage, s.positiveStreak, snap, t);
+    s.stage = stageStep.stage;
+    s.positiveStreak = stageStep.positiveStreak;
+    if (stageStep.completedLog) pushLog(s, stageStep.completedLog);
+
+    // Achieve's bars gate the sixth rung; one rung per tick, never skipping.
+    if (before === "achieve" && s.stage === "achieve") {
+      const bar = achieveBarMet(s.realm, snap);
+      if (bar) {
+        s.stage = "understand";
+        pushLog(s, `[t${t}] STAGE COMPLETE: Achieve — ${bar}`);
+      }
+    } else if (before === "understand" && s.stage === "understand" && understandGateMet(snap)) {
+      s.stage = "harmonize";
+      pushLog(s, `[t${t}] STAGE COMPLETE: Understand — your map matched the territory`);
+    }
+  }
 
   s.metricsPrev = cur;
   s.tick = t;

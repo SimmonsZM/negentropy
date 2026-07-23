@@ -17,12 +17,17 @@ export const ORDER_COST: Record<string, number> = {
   begin_migration: 10,
   send_hail: 1,
   register_forecast: 1,
+  refine_alloy: 2,
+  send_shipment: 2,
+  burn_isotopes: 1,
+  begin_harmonize: 2,
   noop: 0,
 };
 
 // Exergy spent on structural orders — leaves the store as *embodied* work, not
 // heat, so it books to the ledger's built_eu term (Deep Dive §2 conservation).
-export const BUILD_RADIATOR_EU = 150; // build_radiator: exergy drawn from store
+export const BUILD_RADIATOR_EU = 50; // build_radiator: exergy component (M2f: matter now carries the rest)
+export const BUILD_RADIATOR_ALLOY = 2; // build_radiator: structural matter
 export const REPAIR_EU = 100; // repair_systems: exergy drawn from store
 
 // Order-queue horizon by realm (Deep Dive §14): 4 / 28 / 336 / 1008 / ∞.
@@ -40,10 +45,23 @@ export const MIGRATION_BAR = 1200; // absolute wealth bar over the window — ju
 export const MIGRATION_COOLDOWN = 28; // ticks (1 week) between attempts
 export const TRIAL_EVENTS = 3; // seeded perturbations per window, identical for you and the copy
 
+// ---- Harmonize (M2f): the reflexes-only crucible ----
+export const HARMONIZE_WINDOW = 12; // ticks, hands off the helm
+export const HARMONIZE_EVENTS = 2; // milder than the Migration
+export const HARMONIZE_COOLDOWN = 8;
+
 // ---- Foresight (M2e): the registry of claims ----
 export const FORECAST_MAX_ACTIVE = 8;
 export const FORECAST_WINDOW_MAX = 28; // ticks — Foundation's horizon
 export const FLARE_RING_MAX = 64; // remembered flare ticks for claim resolution
+
+// ---- Substance (M2f): matter, refined and shipped ----
+export const ISO_YIELD_DIV = 20; // isotopes per tick = intake * flare_per_mille / (1000 * DIV); x3 during flares
+export const REFINE_EU = 500; // refine_alloy: exergy in (books to built)
+export const REFINE_ALLOY_BASE = 10; // alloy out at metallicity 1000
+export const BURN_ISO_COST = 25; // burn_isotopes: fusion-assist fuel
+export const BURN_FLUX_MULT_MILLI = 1500; // this tick's flux x1.5
+export const CARGO_MAX_PER_SHIPMENT = 500; // per good
 
 /** Proper log score, integer-only: points = round(1000·log2(2p)).
  * p_milli must be one of the table keys (50..950 step 50). If the claim is
@@ -62,7 +80,7 @@ export function forecastScore(p_milli: number, outcome: boolean): number {
 
 // Bumped when the tick function's semantics change; folded into the audit
 // chain so a version drift is tamper-evident, not silent (Deep Dive §1).
-export const SIM_VERSION = 3; // v3: multi-system starmap, light-lagged signals (M2a)
+export const SIM_VERSION = 4; // v4: Foresight (M2e) + the Lattice: stages 1-7, turbulence (M2f)
 
 // Radiator run-temp band for set_radiator_temp (milli-T0).
 export const T_RAD_MIN = 500;

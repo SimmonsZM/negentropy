@@ -66,10 +66,12 @@ export interface Ledger {
 export interface Envelope {
   from: string; // system id
   to: string; // system id
-  kind: "beacon" | "hail";
+  kind: "beacon" | "hail" | "cargo";
   emitted_t: number;
   deliver_at: number;
-  payload: string;
+  payload: string; // cargo: JSON {isotopes, alloy}
+  seq?: number; // per-tick outbox index — dedupe key includes it, so two
+                // shipments (or hails) on one lane in one tick both arrive
 }
 
 export interface ReceivedSignal {
@@ -78,7 +80,7 @@ export interface ReceivedSignal {
   received_t: number;
   payload: string;
   decoded: boolean; // hails arrive already readable; beacons must be decoded
-  kind: "beacon" | "hail";
+  kind: "beacon" | "hail"; // cargo never enters the signal buffer — it lands in stock
 }
 
 export interface SimState {
@@ -99,10 +101,18 @@ export interface SimState {
   decodedFrom: string[]; // system ids whose beacons this mind has decoded
   outbox: Envelope[]; // THIS tick's emissions only; DO drains after each resolve
   realm: Realm; // the big ladder (M2b)
+  verbsUsed: string[]; // distinct manual order kinds ever executed (Control gate)
+  sentHail: boolean;
+  gotHail: boolean;
+  harmonize?: { startedTick: number; endTick: number; events: TrialEvent[]; violated: boolean; netStore: number };
+  harmonizeCooldownUntil: number;
+  turbulence?: { since: number; recovery: number }; // dao-heart turbulence (M2f)
   forecasts: Forecast[]; // Foresight registry (M2e) — Mirror Sight required
   forecastSeq: number;
   flareRing: number[]; // recent flare ticks, capped, for claim resolution
   calibration: { n: number; total_milli: number };
+  stock: { isotopes: number; alloy: number }; // Substance (M2f)
+  burnActive: boolean; // fusion-assist armed for THIS tick's production
   trial?: TrialState; // active tribulation, if any
   migrationCooldownUntil: number; // tick before which a new attempt is refused
 }
@@ -114,8 +124,12 @@ export type Order =
   | { kind: "repair_systems" }
   | { kind: "decode_signal" }
   | { kind: "begin_migration" }
+  | { kind: "begin_harmonize" }
   | { kind: "send_hail"; to: string; text: string }
   | { kind: "register_forecast"; claim: { type: "flare_within"; window: number }; p_milli: number }
+  | { kind: "refine_alloy" }
+  | { kind: "send_shipment"; to: string; isotopes?: number; alloy?: number }
+  | { kind: "burn_isotopes" }
   | { kind: "noop" };
 
 export const LOG_MAX = 200;

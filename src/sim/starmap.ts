@@ -7,6 +7,7 @@ import { MIN_LANE_LAG } from "./core.js";
 
 export interface SystemDef {
   id: string;
+  metallicity_milli: number; // your star is your periodic table (Deep Dive §5.9)
   name: string;
   class: string;
   base_flux_eu: number;
@@ -36,6 +37,9 @@ const lanes: Lane[] = raw.lanes;
   for (const s of systems) {
     if (s.base_flux_eu <= 0 || s.flare_per_mille < 0 || s.flare_per_mille >= 1000) {
       throw new Error(`starmap: system ${s.id} has invalid physics`);
+    }
+    if (s.metallicity_milli < 100 || s.metallicity_milli > 3000) {
+      throw new Error(`starmap: system ${s.id} has invalid metallicity`);
     }
   }
 }

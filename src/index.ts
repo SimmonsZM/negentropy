@@ -103,6 +103,7 @@ export default {
           tick: sim.tick,
           signals: { held: sim.receivedSignals.length, undecoded, decoded_from: sim.decodedFrom },
           calibration: sim.calibration ?? { n: 0, total_milli: 0 },
+          turbulence: sim.turbulence ?? null,
           trial: sim.trial
             ? { kind: sim.trial.kind, ends_tick: sim.trial.endTick, you: sim.trial.playerWealth, copy: sim.trial.mirror.wealth }
             : null,
@@ -119,6 +120,7 @@ export default {
         structures: sim.structures,
         damaged: sim.damaged,
         signals: sim.receivedSignals.slice(-8),
+        stock: sim.stock ?? { isotopes: 0, alloy: 0 },
         trial: sim.trial
           ? {
               kind: sim.trial.kind,
@@ -130,6 +132,8 @@ export default {
               bar: 1200,
             }
           : null,
+        harmonize: sim.harmonize ?? null,
+        turbulence: sim.turbulence ?? null,
         forecasts: (sim.forecasts ?? []).slice(-12),
         calibration: sim.calibration ?? { n: 0, total_milli: 0 },
         realm: sim.realm ?? "embodied",

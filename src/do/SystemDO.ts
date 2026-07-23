@@ -44,6 +44,7 @@ interface Persisted {
   chain: string; // latest audit link
   systemId: string; // which star this DO is (M2a; pre-M2a blobs default wei-9-home)
   inbox: Envelope[]; // undelivered light-lagged mail, ordered on insert
+  deliveredKeys?: string[]; // (from:emitted_t:seq) ring — idempotent delivery for ALL kinds
   webhookUrl?: string; // Watchtower (M2d): where notable events get pushed
   webhookFailures?: number;
   lastNotifiedTick?: number;
@@ -68,6 +69,10 @@ export class SystemDO {
       if (p.sim.forecastSeq === undefined) { p.sim.forecastSeq = 0; repaired = true; }
       if (p.sim.flareRing === undefined) { p.sim.flareRing = []; repaired = true; }
       if (p.sim.calibration === undefined) { p.sim.calibration = { n: 0, total_milli: 0 }; repaired = true; }
+      if (p.sim.verbsUsed === undefined) { p.sim.verbsUsed = []; repaired = true; }
+      if (p.sim.sentHail === undefined) { p.sim.sentHail = false; repaired = true; }
+      if (p.sim.gotHail === undefined) { p.sim.gotHail = false; repaired = true; }
+      if (p.sim.harmonizeCooldownUntil === undefined) { p.sim.harmonizeCooldownUntil = 0; repaired = true; }
       if (p.systemId === undefined) { p.systemId = sysParam ?? "wei-9-home"; repaired = true; }
       if (p.inbox === undefined) { p.inbox = []; repaired = true; }
       if (repaired) await this.ctx.storage.put("p", p);
@@ -194,11 +199,14 @@ export class SystemDO {
       if (!env || typeof env.deliver_at !== "number" || typeof env.from !== "string") {
         return json({ error: "invalid envelope" }, 400);
       }
-      // Idempotent delivery: a retried catch-up may re-send the same pulse.
-      const dup =
-        p.inbox.some((e) => e.from === env.from && e.emitted_t === env.emitted_t) ||
-        p.sim.receivedSignals.some((s) => s.from === env.from && s.emitted_t === env.emitted_t);
-      if (dup) return json({ delivered_to: p.systemId, duplicate: true });
+      // Idempotent delivery for every kind — including cargo, which never
+      // enters the signal buffer. Key includes seq so two same-tick envelopes
+      // on one lane both arrive; a retried catch-up re-sending one does not.
+      const key = `${env.from}:${env.emitted_t}:${env.seq ?? 0}`;
+      p.deliveredKeys ??= [];
+      if (p.deliveredKeys.includes(key)) return json({ delivered_to: p.systemId, duplicate: true });
+      p.deliveredKeys.push(key);
+      if (p.deliveredKeys.length > 128) p.deliveredKeys.splice(0, p.deliveredKeys.length - 128);
       if (env.deliver_at <= p.sim.tick) {
         // Defensive clamp: with MIN_LANE_LAG >= 2 and cron-synced clocks this
         // should be unreachable; if it fires, we deliver at the next tick.
@@ -270,10 +278,11 @@ export class SystemDO {
       if (!body || !Array.isArray(body.orders)) return json({ error: "invalid JSON body" }, 400);
       const target = body.tick ?? p.sim.tick + 1;
       if (target <= p.sim.tick) return json({ error: "tick already resolved" }, 409);
-      const horizon = HORIZON_BY_REALM[p.sim.realm];
+      const base = HORIZON_BY_REALM[p.sim.realm];
+      const horizon = p.sim.turbulence ? Math.max(1, Math.floor(base / 2)) : base;
       if (target > p.sim.tick + horizon) {
         return json(
-          { error: `order horizon exceeded — the ${p.sim.realm} realm may queue at most ${horizon} ticks ahead` },
+          { error: `order horizon exceeded — ${p.sim.turbulence ? "a turbulent heart sees half as far: " : ""}the ${p.sim.realm} realm may queue at most ${horizon} ticks ahead` },
           400,
         );
       }

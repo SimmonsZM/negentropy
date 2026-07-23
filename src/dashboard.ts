@@ -224,6 +224,12 @@ export const DASHBOARD_HTML = `<!doctype html>
           <div class="metric" id="m-panels">—<small> panels</small></div>
           <div class="sub">dissipation capacity</div>
         </div>
+        <div class="card">
+          <h2>Stock</h2>
+          <div class="row"><span>isotopes</span><span id="m-iso">—</span></div>
+          <div class="row"><span>alloy</span><span id="m-alloy">—</span></div>
+          <div class="sub">the wind gives; the refinery earns</div>
+        </div>
         <div class="card ledger">
           <h2>Last Ledger</h2>
           <div class="row"><span>tick</span><span id="l-tick">—</span></div>
@@ -251,7 +257,9 @@ export const DASHBOARD_HTML = `<!doctype html>
         </div>
         <div id="tpreview">dissipation — · failure risk —</div>
         <div class="ctl" style="margin-top:6px;">
-          <button class="btn" id="h-build">Build radiator panel <span class="pill">3 AP + 150 eu</span></button>
+          <button class="btn" id="h-build">Build radiator panel <span class="pill">3 AP + 50 eu + 2 alloy</span></button>
+          <button class="btn" id="h-refine">Refine alloy <span class="pill">2 AP + 500 eu</span></button>
+          <button class="btn" id="h-burn">Fusion-assist <span class="pill">1 AP + 25 iso · flux ×1.5</span></button>
           <button class="btn hot hidden" id="h-repair">Repair systems <span class="pill">2 AP + 100 eu</span></button>
         </div>
         <div id="queue"><div class="qrow"><span>— no orders staged —</span></div></div>
@@ -498,7 +506,13 @@ export const DASHBOARD_HTML = `<!doctype html>
         "set_radiator_temp → " + temp.value, 1);
     });
     document.getElementById("h-build").addEventListener("click", function () {
-      stageOrder({ kind: "build_radiator" }, "build_radiator (150 eu)", 3);
+      stageOrder({ kind: "build_radiator" }, "build_radiator (50 eu + 2 alloy)", 3);
+    });
+    document.getElementById("h-refine").addEventListener("click", function () {
+      stageOrder({ kind: "refine_alloy" }, "refine_alloy (500 eu)", 2);
+    });
+    document.getElementById("h-burn").addEventListener("click", function () {
+      stageOrder({ kind: "burn_isotopes" }, "burn_isotopes (25 iso)", 1);
     });
     document.getElementById("h-repair").addEventListener("click", function () {
       stageOrder({ kind: "repair_systems" }, "repair_systems (100 eu)", 2);
@@ -646,6 +660,16 @@ export const DASHBOARD_HTML = `<!doctype html>
           if (msg && msg.trim()) stageOrder({ kind: "send_hail", to: r.id, text: msg.trim() }, "hail → " + r.id, 1);
         });
         e.appendChild(b);
+        var sb = document.createElement("button");
+        sb.className = "btn ghost";
+        sb.textContent = "ship · 2 AP";
+        sb.addEventListener("click", function () {
+          var iso = Number(window.prompt("Ship how many ISOTOPES to " + r.id + "? (0 for none)") || 0);
+          var al = Number(window.prompt("Ship how much ALLOY to " + r.id + "? (0 for none)") || 0);
+          if (iso > 0 || al > 0) stageOrder({ kind: "send_shipment", to: r.id, isotopes: iso, alloy: al },
+            "ship → " + r.id + " (" + iso + " iso, " + al + " alloy)", 2);
+        });
+        e.appendChild(sb);
         box.appendChild(e);
       });
     } catch (e) { /* keep last render */ }
@@ -678,8 +702,8 @@ export const DASHBOARD_HTML = `<!doctype html>
       line("The sky is closed until t" + sys.migration_cooldown_until + ". Prepare better.", "flare");
       return;
     }
-    if (sys.stage !== "control") {
-      line("Locked — reach Control (3/9) first. The climb precedes the leap.");
+    if (["achieve", "understand", "harmonize"].indexOf(sys.stage) === -1) {
+      line("Locked — reach Achieve (5/9) first. The climb precedes the leap.");
       return;
     }
     line("ELIGIBLE. The upload copies you exactly — reflexes, instincts, doubts — and the sky tests you both for 12 ticks. Win by out-deciding yourself.");
@@ -788,8 +812,12 @@ export const DASHBOARD_HTML = `<!doctype html>
       var rep = document.getElementById("h-repair");
       if (sys.damaged) rep.classList.remove("hidden"); else rep.classList.add("hidden");
       var buildBtn = document.getElementById("h-build");
-      buildBtn.disabled = (flows.store_eu ?? 0) < 150;
-      buildBtn.title = buildBtn.disabled ? "needs 150 eu in store" : "";
+      var stock = sys.stock || { isotopes: 0, alloy: 0 };
+      set("m-iso", num(stock.isotopes));
+      set("m-alloy", num(stock.alloy));
+      buildBtn.disabled = (flows.store_eu ?? 0) < 50 || stock.alloy < 2;
+      buildBtn.title = buildBtn.disabled ? "needs 50 eu + 2 alloy (refine first)" : "";
+      document.getElementById("h-burn").disabled = stock.isotopes < 25;
 
       statusEl.classList.remove("err");
       statusEl.textContent = "live · updated " + new Date().toLocaleTimeString();

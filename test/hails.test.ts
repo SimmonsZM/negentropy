@@ -85,3 +85,46 @@ describe("M2c: the registry — minting minds", () => {
     expect((await mint("qi-1")).status).toBe(409); // map is full
   });
 });
+
+describe("M2f: cargo dedupe honors seq — two same-tick shipments both arrive", () => {
+  it("assigns seq in the outbox; the recipient accepts both, rejects a retry", async () => {
+    const { getSystem } = await import("../src/sim/starmap.js");
+    let s = genesisState();
+    s.stock.isotopes = 100;
+    s = resolve(s, [
+      { kind: "send_shipment", to: "cinder-veil", isotopes: 30 },
+      { kind: "send_shipment", to: "cinder-veil", isotopes: 20 },
+    ], RULES, SEED, getSystem("wei-9-home")!);
+    expect(s.outbox.length).toBe(2);
+    expect(s.outbox.map((e) => e.seq)).toEqual([0, 1]);
+    expect(s.stock.isotopes).toBe(51); // 100 − 50 shipped + 1 stellar-wind byproduct this tick
+
+    const { SystemDO } = await import("../src/do/SystemDO.js");
+    const map = new Map<string, unknown>();
+    const ctx = { storage: {
+      get: async (k: string) => map.get(k),
+      put: async (k: string, v: unknown) => void map.set(k, v),
+      delete: async (k: string) => void map.delete(k),
+    } } as unknown as DurableObjectState;
+    const ns = { idFromName: (n: string) => ({ name: n }), get: () => ({ fetch: async () => new Response("{}") }) } as unknown as DurableObjectNamespace;
+    const doObj = new SystemDO(ctx, { SYSTEM_DO: ns, REGISTRY_DO: ns, DEV_TOKEN: "t", WORLD_SEED: "negentropy-season-0", GENESIS_EPOCH: "0" });
+    await doObj.fetch(new Request("https://do/state?sys=cinder-veil&toTick=1"));
+
+    const deliver = (env: unknown) => doObj.fetch(new Request("https://do/deliver?sys=cinder-veil", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(env),
+    }));
+    const r1 = (await (await deliver(s.outbox[0])).json()) as any;
+    const r2 = (await (await deliver(s.outbox[1])).json()) as any;
+    const r3 = (await (await deliver(s.outbox[1])).json()) as any; // catch-up retry
+    expect(r1.duplicate).toBeUndefined();
+    expect(r2.duplicate).toBeUndefined(); // seq made it distinct
+    expect(r3.duplicate).toBe(true);
+
+    const target = Math.max(s.outbox[0].deliver_at, s.outbox[1].deliver_at);
+    const st = (await (await doObj.fetch(new Request(`https://do/state?sys=cinder-veil&toTick=${target}`))).json()) as any;
+    const log = st.sim.log.join("\n");
+    expect(log).toContain("+30 isotopes"); // first hold, exactly once
+    expect(log).toContain("+20 isotopes"); // second hold — seq kept it alive
+    expect(st.sim.stock.isotopes).toBeGreaterThanOrEqual(50); // cargo + its own wind
+  });
+});
