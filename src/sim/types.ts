@@ -56,7 +56,7 @@ export interface Ledger {
 export interface Envelope {
   from: string; // system id
   to: string; // system id
-  kind: "beacon";
+  kind: "beacon" | "hail";
   emitted_t: number;
   deliver_at: number;
   payload: string;
@@ -67,7 +67,8 @@ export interface ReceivedSignal {
   emitted_t: number;
   received_t: number;
   payload: string;
-  decoded: boolean;
+  decoded: boolean; // hails arrive already readable; beacons must be decoded
+  kind: "beacon" | "hail";
 }
 
 export interface SimState {
@@ -99,6 +100,7 @@ export type Order =
   | { kind: "repair_systems" }
   | { kind: "decode_signal" }
   | { kind: "begin_migration" }
+  | { kind: "send_hail"; to: string; text: string }
   | { kind: "noop" };
 
 export const LOG_MAX = 200;

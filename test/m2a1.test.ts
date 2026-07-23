@@ -29,6 +29,10 @@ function makeEnv(delivered: string[]): Env {
         },
       }),
     } as unknown as DurableObjectNamespace,
+    REGISTRY_DO: {
+      idFromName: (n: string) => ({ name: n }),
+      get: () => ({ fetch: async () => new Response("{}", { status: 200 }) }),
+    } as unknown as DurableObjectNamespace,
     DEV_TOKEN: "t",
     WORLD_SEED: "negentropy-season-0",
     GENESIS_EPOCH: "0",

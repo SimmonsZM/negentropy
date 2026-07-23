@@ -5,13 +5,16 @@
     { "id": "cinder-veil", "name": "Cinder Veil", "class": "M", "base_flux_eu": 600, "flare_per_mille": 110, "beacon": true },
     { "id": "pale-crown", "name": "Pale Crown", "class": "G", "base_flux_eu": 1400, "flare_per_mille": 40, "beacon": true },
     { "id": "iron-halo", "name": "Iron Halo", "class": "K", "base_flux_eu": 1000, "flare_per_mille": 60, "beacon": false },
-    { "id": "sable-drift", "name": "Sable Drift", "class": "M", "base_flux_eu": 500, "flare_per_mille": 140, "beacon": true }
+    { "id": "sable-drift", "name": "Sable Drift", "class": "M", "base_flux_eu": 500, "flare_per_mille": 140, "beacon": true },
+    { "id": "far-hearth", "name": "Far Hearth", "class": "G", "base_flux_eu": 1300, "flare_per_mille": 50, "beacon": false }
   ],
   "lanes": [
     { "a": "wei-9-home", "b": "cinder-veil", "lag_ticks": 2 },
     { "a": "wei-9-home", "b": "pale-crown", "lag_ticks": 3 },
     { "a": "wei-9-home", "b": "iron-halo", "lag_ticks": 4 },
     { "a": "cinder-veil", "b": "sable-drift", "lag_ticks": 2 },
-    { "a": "pale-crown", "b": "iron-halo", "lag_ticks": 2 }
+    { "a": "pale-crown", "b": "iron-halo", "lag_ticks": 2 },
+    { "a": "iron-halo", "b": "far-hearth", "lag_ticks": 2 },
+    { "a": "sable-drift", "b": "far-hearth", "lag_ticks": 3 }
   ]
 }

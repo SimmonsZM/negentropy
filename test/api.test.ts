@@ -18,6 +18,7 @@ function makeCtx(seed?: Map<string, unknown>) {
 
 const ENV: Env = {
   SYSTEM_DO: {} as unknown as DurableObjectNamespace,
+  REGISTRY_DO: {} as unknown as DurableObjectNamespace,
   DEV_TOKEN: "t",
   WORLD_SEED: "negentropy-season-0",
   GENESIS_EPOCH: "0",

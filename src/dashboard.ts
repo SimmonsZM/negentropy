@@ -551,7 +551,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       var e = document.createElement("div");
       e.className = "sigrow";
       var txt = document.createElement("span");
-      txt.textContent = (sig.decoded ? "✓ " : "· ") + sig.from + "  t" + sig.emitted_t + "→t" + sig.received_t +
+      txt.textContent = (sig.kind === "hail" ? "✉ " : sig.decoded ? "✓ " : "· ") + sig.from + "  t" + sig.emitted_t + "→t" + sig.received_t +
         (sig.decoded ? "  " + sig.payload : "  [undecoded]");
       e.appendChild(txt);
       if (!sig.decoded) {
@@ -576,17 +576,28 @@ export const DASHBOARD_HTML = `<!doctype html>
         var n = map.neighbors[i];
         try {
           var v = await api("/v1/systems/" + n.id);
-          rows.push(v.system.name + " (" + v.system.class + ")  lag " + v.lag_ticks +
+          rows.push({ id: n.id, text: v.system.name + " (" + v.system.class + ")  lag " + v.lag_ticks +
             "  as of t" + v.as_of_tick + "  radiating " + v.signature.radiated_eu + " eu" +
-            (v.signature.flare ? "  ⚠ FLARING" : ""));
+            (v.signature.flare ? "  ⚠ FLARING" : "") });
         } catch (e) {
-          rows.push(n.id + "  lag " + n.lag_ticks + "  — too faint —");
+          rows.push({ id: n.id, text: n.id + "  lag " + n.lag_ticks + "  — too faint —" });
         }
       }
       box.innerHTML = "";
       rows.forEach(function (r) {
         var e = document.createElement("div");
-        e.textContent = r;
+        e.className = "sigrow";
+        var sp = document.createElement("span");
+        sp.textContent = r.text;
+        e.appendChild(sp);
+        var b = document.createElement("button");
+        b.className = "btn ghost";
+        b.textContent = "hail · 1 AP";
+        b.addEventListener("click", function () {
+          var msg = window.prompt("Hail " + r.id + " — one thought, 200 chars, arrives with the light:");
+          if (msg && msg.trim()) stageOrder({ kind: "send_hail", to: r.id, text: msg.trim() }, "hail → " + r.id, 1);
+        });
+        e.appendChild(b);
         box.appendChild(e);
       });
     } catch (e) { /* keep last render */ }

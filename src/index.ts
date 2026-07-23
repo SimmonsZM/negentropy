@@ -8,8 +8,11 @@ import { allSystems, getSystem, laneLag, neighborsOf } from "./sim/starmap.js";
 import { DASHBOARD_HTML } from "./dashboard.js";
 import type { Env } from "./do/SystemDO.js";
 export { SystemDO } from "./do/SystemDO.js";
+export { RegistryDO } from "./do/RegistryDO.js";
+import { sha256Hex } from "./sim/support.js";
 
-const HOME = "wei-9-home"; // M2a: single identity, fixed home. D1 identities land in M2b.
+// Identities live in the RegistryDO (M2c). DEV_TOKEN remains the admin key
+// and maps to the founding identity, so the original token keeps working.
 
 function currentTick(env: Env, nowMs = Date.now()): number {
   const genesis = Number(env.GENESIS_EPOCH);
@@ -51,13 +54,31 @@ export default {
     }
 
     const auth = req.headers.get("authorization") ?? "";
-    if (!env.DEV_TOKEN || auth !== `Bearer ${env.DEV_TOKEN}`) {
-      return json({ error: "unauthorized" }, 401);
+    const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!bearer || !env.DEV_TOKEN) return json({ error: "unauthorized" }, 401);
+
+    let ident: { name: string; systemId: string; admin: boolean };
+    if (bearer === env.DEV_TOKEN) {
+      ident = { name: "wei-9", systemId: "wei-9-home", admin: true };
+    } else {
+      const reg = env.REGISTRY_DO.get(env.REGISTRY_DO.idFromName("registry"));
+      const r = await reg.fetch(`https://do/auth?h=${await sha256Hex(bearer)}`);
+      if (r.status !== 200) return json({ error: "unauthorized" }, 401);
+      const found = (await r.json()) as { name: string; systemId: string };
+      ident = { name: found.name, systemId: found.systemId, admin: false };
     }
 
     const t = currentTick(env);
+    const HOME = ident.systemId;
     const homeFetch = (path: string, init?: RequestInit) =>
       stubFor(env, HOME).fetch(`https://do${path}?sys=${HOME}&toTick=${t}`, init);
+
+    // Admin: mint a new mind. Token is returned exactly once — hand it over.
+    if (req.method === "POST" && url.pathname === "/v1/admin/identities") {
+      if (!ident.admin) return json({ error: "admin only" }, 403);
+      const reg = env.REGISTRY_DO.get(env.REGISTRY_DO.idFromName("registry"));
+      return reg.fetch("https://do/mint", { method: "POST", body: await req.text(), headers: { "content-type": "application/json" } });
+    }
 
     if (req.method === "GET" && (url.pathname === "/v1/self" || url.pathname === "/v1/systems/home")) {
       const r = await homeFetch("/state");
@@ -68,7 +89,7 @@ export default {
         ).length;
         const realm = (sim.realm ?? "embodied") as Realm;
         return json({
-          identity: "wei-9",
+          identity: ident.name,
           realm: REALM_LABELS[realm],
           stage: STAGE_LABELS[sim.stage as Stage] ?? sim.stage,
           sights: SIGHTS_BY_REALM[realm],

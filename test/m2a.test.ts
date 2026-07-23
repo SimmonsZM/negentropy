@@ -25,7 +25,7 @@ describe("M2a: wei-9-home physics are PINNED across the multi-system refactor", 
 
 describe("M2a: starmap", () => {
   it("loads, validates, and answers lane queries symmetrically", () => {
-    expect(allSystems().length).toBe(5);
+    expect(allSystems().length).toBe(6);
     expect(laneLag("wei-9-home", "cinder-veil")).toBe(2);
     expect(laneLag("cinder-veil", "wei-9-home")).toBe(2);
     expect(laneLag("wei-9-home", "sable-drift")).toBeUndefined(); // no direct lane

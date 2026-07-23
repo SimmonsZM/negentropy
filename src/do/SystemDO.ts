@@ -13,6 +13,7 @@ import type { Envelope, Order, SimState } from "../sim/types.js";
 
 export interface Env {
   SYSTEM_DO: DurableObjectNamespace;
+  REGISTRY_DO: DurableObjectNamespace;
   DEV_TOKEN: string;
   WORLD_SEED: string;
   GENESIS_EPOCH: string;

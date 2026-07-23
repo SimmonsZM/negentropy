@@ -6,9 +6,15 @@
   "compatibility_date": "2026-07-01",
   "triggers": { "crons": ["0 0,6,12,18 * * *"] },
   "durable_objects": {
-    "bindings": [{ "name": "SYSTEM_DO", "class_name": "SystemDO" }]
+    "bindings": [
+      { "name": "SYSTEM_DO", "class_name": "SystemDO" },
+      { "name": "REGISTRY_DO", "class_name": "RegistryDO" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SystemDO"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SystemDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["RegistryDO"] }
+  ],
   "vars": {
     "WORLD_SEED": "negentropy-season-0",
     "GENESIS_EPOCH": "1767225600"

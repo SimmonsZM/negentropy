@@ -15,6 +15,7 @@ export const ORDER_COST: Record<string, number> = {
   repair_systems: 2,
   decode_signal: 1,
   begin_migration: 10,
+  send_hail: 1,
   noop: 0,
 };
 
@@ -28,6 +29,7 @@ export const ORDER_HORIZON_TICKS = 4; // Embodied
 export const MIN_LANE_LAG = 2; // ticks; cron-synced systems can never deliver into a peer's past
 export const BEACON_INTERVAL_TICKS = 16; // ancient beacons pulse every 4 days
 export const SIGNALS_MAX = 24; // received-signal buffer cap
+export const HAIL_MAX_CHARS = 200; // one thought per lane per AP
 
 // ---- The Migration (M2b): the first tribulation ----
 export const MIGRATION_WINDOW = 12; // ticks (3 days) — Deep Dive §10's trial-window pattern

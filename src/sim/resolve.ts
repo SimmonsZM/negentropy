@@ -8,13 +8,13 @@
 import {
   AP_BANK_CAP, AP_PER_TICK, BASE_LOAD_EU, BEACON_INTERVAL_TICKS, BUILD_RADIATOR_EU, ETA_MILLI,
   LEAK_PER_MILLE, MIGRATION_AP, MIGRATION_BAR, MIGRATION_COOLDOWN, MIGRATION_EU, MIGRATION_WINDOW,
-  ORDER_COST, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
+  HAIL_MAX_CHARS, ORDER_COST, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
 } from "./core.js";
 import { evaluate, type Action, type Metrics, type Rule } from "./reflex.js";
 import { advanceStage } from "./stages.js";
-import { getSystem, neighborsOf, type SystemDef } from "./starmap.js";
+import { getSystem, laneLag, neighborsOf, type SystemDef } from "./starmap.js";
 import {
   pushLog, type Envelope, type MirrorEnt, type Order, type SimState, type TrialEvent,
 } from "./types.js";
@@ -154,6 +154,7 @@ export function resolve(
   let built = 0; // exergy spent on structural orders this tick (builds + repairs + uploads)
   let decodedNew = false; // a foreign beacon was decoded this tick (Connect gate)
   let beginTrial = false;
+  const hails: Envelope[] = [];
   let justAscended = false; // the threshold tick belongs to neither climb
 
   // ---- Phase 3: orders (AP-metered, initiative = submission order) ----
@@ -238,6 +239,20 @@ export function resolve(
       built += MIGRATION_EU;
       beginTrial = true;
       pushLog(s, `[t${t}] THE MIGRATION BEGINS — the copy wakes with your reflexes and your doubts`);
+    } else if (o.kind === "send_hail") {
+      const lag = laneLag(sys.id, o.to);
+      if (lag === undefined) {
+        pushLog(s, `[t${t}] send_hail rejected — no lane from ${sys.id} to ${o.to}`);
+        continue;
+      }
+      const text = (o.text ?? "").slice(0, HAIL_MAX_CHARS).trim();
+      if (!text) {
+        pushLog(s, `[t${t}] send_hail rejected — an empty hail is just heat`);
+        continue;
+      }
+      s.ap -= cost;
+      hails.push({ from: sys.id, to: o.to, kind: "hail", emitted_t: t, deliver_at: t + lag, payload: text });
+      pushLog(s, `[t${t}] hail sent toward ${o.to} — arrives with the light at t${t + lag}`);
     }
   }
 
@@ -413,9 +428,12 @@ export function resolve(
       emitted_t: env.emitted_t,
       received_t: t,
       payload: env.payload,
-      decoded: false,
+      decoded: env.kind === "hail", // a mind's hail is already in shared protocol
+      kind: env.kind,
     });
-    pushLog(s, `[t${t}] signal received from ${env.from} (emitted t${env.emitted_t}, ${t - env.emitted_t} ticks in flight)`);
+    pushLog(s, env.kind === "hail"
+      ? `[t${t}] HAIL from ${env.from} (${t - env.emitted_t} ticks in flight): "${env.payload}"`
+      : `[t${t}] signal received from ${env.from} (emitted t${env.emitted_t}, ${t - env.emitted_t} ticks in flight)`);
   }
   if (s.receivedSignals.length > SIGNALS_MAX) {
     s.receivedSignals.splice(0, s.receivedSignals.length - SIGNALS_MAX);
@@ -435,7 +453,7 @@ export function resolve(
     }
     pushLog(s, `[t${t}] ancient beacon pulse — ${emissions.length} lanes`);
   }
-  s.outbox = emissions;
+  s.outbox = [...hails, ...emissions];
 
   s.metricsPrev = cur;
   s.tick = t;
