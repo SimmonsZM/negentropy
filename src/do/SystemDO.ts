@@ -161,7 +161,21 @@ export class SystemDO {
     await this.advanceTo(p, toTick); // lazy catch-up on every contact
 
     if (req.method === "GET" && url.pathname === "/state") {
-      return json({ sim: p.sim, chain: p.chain, rules: p.rules, systemId: p.systemId });
+      const pending: Array<{ tick: number; orders: Order[] }> = [];
+      for (let i = 1; i <= ORDER_HORIZON_TICKS; i++) {
+        const tk = p.sim.tick + i;
+        const o = await this.ctx.storage.get<Order[]>(`orders:${tk}`);
+        if (o && o.length) pending.push({ tick: tk, orders: o });
+      }
+      return json({ sim: p.sim, chain: p.chain, rules: p.rules, systemId: p.systemId, pending });
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/orders") {
+      const body = ((await readJson()) ?? {}) as { tick?: number };
+      const target = body.tick ?? p.sim.tick + 1;
+      const existing = (await this.ctx.storage.get<Order[]>(`orders:${target}`)) ?? [];
+      await this.ctx.storage.delete(`orders:${target}`);
+      return json({ cleared_tick: target, count: existing.length });
     }
 
     // Lagged public view for a distant observer: the snapshot at (their now - lag).

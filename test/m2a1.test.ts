@@ -85,3 +85,40 @@ describe("M2a.1: first-contact catch-up is bounded and retry-safe", () => {
     expect(body.sim.receivedSignals.filter((s: any) => s.emitted_t === 4).length).toBe(1);
   });
 });
+
+describe("M2a.2: the helm's API", () => {
+  it("/state lists pending orders; DELETE /orders clears a tick", async () => {
+    const { ctx } = makeCtx();
+    const doObj = new SystemDO(ctx, makeEnv([]));
+    await doObj.fetch(new Request("https://do/state?sys=wei-9-home&toTick=3"));
+
+    await doObj.fetch(new Request("https://do/orders?sys=wei-9-home&toTick=3", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ orders: [{ kind: "set_throttle", target: "collectors", value_milli: 800 }] }),
+    }));
+
+    let st = (await (await doObj.fetch(new Request("https://do/state?sys=wei-9-home&toTick=3"))).json()) as any;
+    expect(st.pending.length).toBe(1);
+    expect(st.pending[0].tick).toBe(4);
+    expect(st.pending[0].orders[0].kind).toBe("set_throttle");
+
+    const del = (await (await doObj.fetch(new Request("https://do/orders?sys=wei-9-home&toTick=3", {
+      method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ tick: 4 }),
+    }))).json()) as any;
+    expect(del.count).toBe(1);
+
+    st = (await (await doObj.fetch(new Request("https://do/state?sys=wei-9-home&toTick=3"))).json()) as any;
+    expect(st.pending.length).toBe(0);
+  });
+});
+
+describe("M2a.2: dashboard template sanity", () => {
+  it("ships the helm, queue, and reflex editor markup", async () => {
+    const { DASHBOARD_HTML } = await import("../src/dashboard.js");
+    for (const id of ["h-send", "h-thr", "h-temp", "h-build", "queue", "pending", "reflex-ta", "rx-save", "tpreview"]) {
+      expect(DASHBOARD_HTML).toContain('id="' + id + '"');
+    }
+    expect(DASHBOARD_HTML).toContain("stageOrder");
+    expect(DASHBOARD_HTML).not.toContain("${"); // template stayed literal-safe
+  });
+});

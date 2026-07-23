@@ -28,7 +28,11 @@ const OPENAPI = {
     "/v1/map": { get: { summary: "The known starmap: systems, lanes, lags, decode status" } },
     "/v1/systems/home": { get: { summary: "Your home system, live (fog by omission)" } },
     "/v1/systems/{id}": { get: { summary: "A neighbor's thermal signature, as it WAS (light-lagged)" } },
-    "/v1/orders": { post: { summary: "Queue orders for the next tick (AP-metered, horizon-capped)" } },
+    "/v1/orders": {
+      post: { summary: "Queue orders for the next tick (AP-metered, horizon-capped)" },
+      get: { summary: "Orders already queued for upcoming ticks" },
+      delete: { summary: "Clear queued orders for a tick (default: next)" },
+    },
     "/v1/reflexes": { get: { summary: "List rules" }, put: { summary: "Replace rules (costs AP; instincts locked)" } },
     "/v1/spec": { get: { summary: "This document" } },
   },
@@ -127,8 +131,18 @@ export default {
       });
     }
 
-    if (req.method === "POST" && url.pathname === "/v1/orders") {
-      return homeFetch("/orders", { method: "POST", body: await req.text(), headers: { "content-type": "application/json" } });
+    if (url.pathname === "/v1/orders") {
+      if (req.method === "POST") {
+        return homeFetch("/orders", { method: "POST", body: await req.text(), headers: { "content-type": "application/json" } });
+      }
+      if (req.method === "GET") {
+        const r = await homeFetch("/state");
+        const { sim, pending } = (await r.json()) as any;
+        return json({ tick: sim.tick, pending: pending ?? [] });
+      }
+      if (req.method === "DELETE") {
+        return homeFetch("/orders", { method: "DELETE", body: await req.text(), headers: { "content-type": "application/json" } });
+      }
     }
     if (url.pathname === "/v1/reflexes") {
       if (req.method === "GET") {

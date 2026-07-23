@@ -138,6 +138,35 @@ export const DASHBOARD_HTML = `<!doctype html>
     font-size: 12px;
   }
   .hidden { display: none !important; }
+  /* helm */
+  .btn {
+    background: var(--accent); color: #05201c; border: 0; border-radius: 8px;
+    padding: 7px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--edge); }
+  .btn.hot { background: var(--hot); color: #2a0808; }
+  .ctl { display: flex; align-items: center; gap: 12px; padding: 8px 0; flex-wrap: wrap; }
+  .ctl label { color: var(--dim); font-size: 12px; min-width: 130px; }
+  .ctl input[type="range"] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+  .ctl .val { min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { font-size: 11px; color: var(--dim); border: 1px solid var(--edge); border-radius: 999px; padding: 2px 8px; }
+  #tpreview { font-size: 12px; color: var(--dim); }
+  #tpreview.danger { color: var(--hot); }
+  #queue, #pending { background: var(--panel2); border: 1px solid var(--edge); border-radius: 8px; padding: 8px 12px; font-size: 12px; margin-top: 8px; }
+  #queue .qrow, #pending div { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; color: var(--dim); }
+  #queue .qrow b { color: var(--ink); font-weight: 500; }
+  #queue .qrow button { background: none; border: 0; color: var(--hot); cursor: pointer; font: inherit; }
+  #qtotals { margin-top: 8px; font-size: 12px; color: var(--dim); }
+  #qtotals.warn { color: var(--warn); }
+  #reflex-ta {
+    width: 100%; min-height: 220px; background: var(--panel2); border: 1px solid var(--edge);
+    border-radius: 8px; color: var(--ink); font: 12px/1.5 var(--mono); padding: 10px 12px; resize: vertical;
+  }
+  #reflex-result { font-size: 12px; margin-top: 8px; color: var(--dim); }
+  #reflex-result.err { color: var(--hot); }
+  .sigrow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 3px 0; }
+  .sigrow span { color: var(--dim); }
 </style>
 </head>
 <body>
@@ -207,6 +236,33 @@ export const DASHBOARD_HTML = `<!doctype html>
         </div>
       </div>
       <div class="card wide" style="margin-top:16px;">
+        <h2>Helm — orders resolve at the next tick</h2>
+        <div class="ctl">
+          <label>Collector throttle</label>
+          <input type="range" id="h-thr" min="0" max="100" step="5" value="60" />
+          <span class="val" id="h-thr-val">60%</span>
+          <button class="btn" id="h-thr-q">Queue <span class="pill">1 AP</span></button>
+        </div>
+        <div class="ctl">
+          <label>Radiator run-temp</label>
+          <input type="range" id="h-temp" min="500" max="2000" step="50" value="1000" />
+          <span class="val" id="h-temp-val">1000</span>
+          <button class="btn" id="h-temp-q">Queue <span class="pill">1 AP</span></button>
+        </div>
+        <div id="tpreview">dissipation — · failure risk —</div>
+        <div class="ctl" style="margin-top:6px;">
+          <button class="btn" id="h-build">Build radiator panel <span class="pill">3 AP + 150 eu</span></button>
+          <button class="btn hot hidden" id="h-repair">Repair systems <span class="pill">2 AP + 100 eu</span></button>
+        </div>
+        <div id="queue"><div class="qrow"><span>— no orders staged —</span></div></div>
+        <div id="qtotals">stage orders above, then send</div>
+        <div class="ctl">
+          <button class="btn" id="h-send" disabled>Send orders</button>
+          <button class="btn ghost" id="h-discard" disabled>Discard staged</button>
+        </div>
+        <div id="pending"><div>— nothing queued on the server —</div></div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
         <h2>Log Tail</h2>
         <div id="log"></div>
       </div>
@@ -217,6 +273,21 @@ export const DASHBOARD_HTML = `<!doctype html>
       <div class="card wide" style="margin-top:16px;">
         <h2>Signals</h2>
         <div id="signals"><div>— nothing held —</div></div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
+        <h2>Reflexes — your automation is you</h2>
+        <div class="ctl">
+          <button class="btn ghost" id="rx-open">Open editor</button>
+          <span class="pill">saving costs 2 AP · instincts stay locked until Mirror Sight</span>
+        </div>
+        <div id="rx-box" class="hidden">
+          <textarea id="reflex-ta" spellcheck="false"></textarea>
+          <div class="ctl">
+            <button class="btn" id="rx-save">Save reflexes <span class="pill">2 AP</span></button>
+            <button class="btn ghost" id="rx-close">Close</button>
+          </div>
+          <div id="reflex-result"></div>
+        </div>
       </div>
     </main>
   </div>
@@ -281,6 +352,167 @@ export const DASHBOARD_HTML = `<!doctype html>
     return res.json();
   }
 
+  async function apiSend(path, method, body) {
+    var res = await fetch(path, {
+      method: method,
+      headers: { Authorization: "Bearer " + token(), "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (res.status === 401) { signOut(); throw new Error("401"); }
+    var data = null;
+    try { data = await res.json(); } catch (e) { /* noop */ }
+    if (!res.ok) throw new Error((data && data.error) ? data.error : "HTTP " + res.status);
+    return data;
+  }
+
+  // ---- Helm: stage locally, send as one batch, see what's queued server-side ----
+  var staged = [];
+  var lastSelf = null, lastSys = null;
+
+  function stageOrder(order, label, cost) {
+    staged.push({ order: order, label: label, cost: cost });
+    renderQueue();
+  }
+
+  function renderQueue() {
+    var q = document.getElementById("queue");
+    q.innerHTML = "";
+    if (!staged.length) {
+      q.innerHTML = '<div class="qrow"><span>— no orders staged —</span></div>';
+    } else {
+      staged.forEach(function (it, i) {
+        var r = document.createElement("div");
+        r.className = "qrow";
+        var b = document.createElement("b");
+        b.textContent = it.label;
+        var right = document.createElement("span");
+        right.textContent = it.cost + " AP ";
+        var x = document.createElement("button");
+        x.textContent = "✕";
+        x.addEventListener("click", function () { staged.splice(i, 1); renderQueue(); });
+        right.appendChild(x);
+        r.appendChild(b);
+        r.appendChild(right);
+        q.appendChild(r);
+      });
+    }
+    var total = staged.reduce(function (s, it) { return s + it.cost; }, 0);
+    var apNow = lastSelf ? lastSelf.ap : 0;
+    var apAtResolve = Math.min(30, apNow + 10);
+    var t = document.getElementById("qtotals");
+    t.textContent = staged.length
+      ? "staged " + staged.length + " · " + total + " AP of " + apAtResolve + " available at resolve (banked " + apNow + " +10, cap 30)"
+      : "stage orders above, then send";
+    t.className = total > apAtResolve ? "warn" : "";
+    document.getElementById("h-send").disabled = !staged.length;
+    document.getElementById("h-discard").disabled = !staged.length;
+  }
+
+  async function loadPending() {
+    try {
+      var res = await api("/v1/orders");
+      var box = document.getElementById("pending");
+      box.innerHTML = "";
+      if (!res.pending || !res.pending.length) {
+        box.innerHTML = "<div><span>— nothing queued on the server —</span></div>";
+        return;
+      }
+      res.pending.forEach(function (pt) {
+        pt.orders.forEach(function (o) {
+          var r = document.createElement("div");
+          var s1 = document.createElement("span");
+          s1.textContent = "queued for t" + pt.tick + ": " + o.kind + (o.value_milli !== undefined ? " " + o.value_milli : "");
+          r.appendChild(s1);
+          box.appendChild(r);
+        });
+        var rc = document.createElement("div");
+        var bc = document.createElement("button");
+        bc.className = "btn ghost";
+        bc.textContent = "clear t" + pt.tick;
+        bc.addEventListener("click", async function () {
+          try { await apiSend("/v1/orders", "DELETE", { tick: pt.tick }); loadPending(); }
+          catch (e) { statusEl.textContent = "clear failed: " + e.message; }
+        });
+        rc.appendChild(bc);
+        box.appendChild(rc);
+      });
+    } catch (e) { /* keep last render */ }
+  }
+
+  function tempPreview() {
+    var T = Number(document.getElementById("h-temp").value);
+    var panels = lastSys && lastSys.structures && lastSys.structures.radiators ? lastSys.structures.radiators.panels : 8;
+    var D = Math.floor(panels * 50 * Math.pow(T / 1000, 4));
+    var riskPerMille = T > 1200 ? Math.floor((T - 1200) / 10) : 0;
+    var el = document.getElementById("tpreview");
+    el.textContent = "dissipation " + D + " eu/tick at " + panels + " panels · panel failure " +
+      (riskPerMille / 10).toFixed(1) + "%/panel/tick" + (riskPerMille > 0 ? "  ⚠ running hot" : "");
+    el.className = riskPerMille > 0 ? "danger" : "";
+    set("h-temp-val", String(T));
+  }
+
+  function wireHelm() {
+    var thr = document.getElementById("h-thr");
+    thr.addEventListener("input", function () { set("h-thr-val", thr.value + "%"); });
+    document.getElementById("h-thr-q").addEventListener("click", function () {
+      stageOrder({ kind: "set_throttle", target: "collectors", value_milli: Number(thr.value) * 10 },
+        "set_throttle → " + thr.value + "%", 1);
+    });
+    var temp = document.getElementById("h-temp");
+    temp.addEventListener("input", tempPreview);
+    document.getElementById("h-temp-q").addEventListener("click", function () {
+      stageOrder({ kind: "set_radiator_temp", value_milli: Number(temp.value) },
+        "set_radiator_temp → " + temp.value, 1);
+    });
+    document.getElementById("h-build").addEventListener("click", function () {
+      stageOrder({ kind: "build_radiator" }, "build_radiator (150 eu)", 3);
+    });
+    document.getElementById("h-repair").addEventListener("click", function () {
+      stageOrder({ kind: "repair_systems" }, "repair_systems (100 eu)", 2);
+    });
+    document.getElementById("h-discard").addEventListener("click", function () { staged = []; renderQueue(); });
+    document.getElementById("h-send").addEventListener("click", async function () {
+      try {
+        var res = await apiSend("/v1/orders", "POST", { orders: staged.map(function (it) { return it.order; }) });
+        statusEl.textContent = "orders queued for tick " + res.queued_for_tick + " · resolves on the countdown";
+        staged = [];
+        renderQueue();
+        loadPending();
+      } catch (e) {
+        statusEl.classList.add("err");
+        statusEl.textContent = "send failed: " + e.message;
+      }
+    });
+
+    document.getElementById("rx-open").addEventListener("click", async function () {
+      try {
+        var rules = await api("/v1/reflexes");
+        document.getElementById("reflex-ta").value = JSON.stringify(rules, null, 2);
+        document.getElementById("rx-box").classList.remove("hidden");
+        document.getElementById("reflex-result").textContent = "";
+      } catch (e) { /* status already set */ }
+    });
+    document.getElementById("rx-close").addEventListener("click", function () {
+      document.getElementById("rx-box").classList.add("hidden");
+    });
+    document.getElementById("rx-save").addEventListener("click", async function () {
+      var out = document.getElementById("reflex-result");
+      var parsed;
+      try { parsed = JSON.parse(document.getElementById("reflex-ta").value); }
+      catch (e) { out.className = "err"; out.textContent = "not valid JSON: " + e.message; return; }
+      try {
+        var res = await apiSend("/v1/reflexes", "PUT", parsed);
+        out.className = "";
+        out.textContent = "saved · " + res.ap_remaining + " AP remaining · complexity " +
+          res.cost.map(function (c) { return c.id + ":" + c.complexity; }).join("  ");
+        refresh();
+      } catch (e) {
+        out.className = "err";
+        out.textContent = e.message;
+      }
+    });
+  }
+
   // Ticks land at 00/06/12/18 UTC — a pure wall-clock boundary.
   var TICK_MS = 6 * 3600 * 1000;
   function nextTickMs() {
@@ -307,8 +539,20 @@ export const DASHBOARD_HTML = `<!doctype html>
     }
     signals.slice().reverse().forEach(function (sig) {
       var e = document.createElement("div");
-      e.textContent = (sig.decoded ? "✓ " : "· ") + sig.from + "  t" + sig.emitted_t + "→t" + sig.received_t +
-        (sig.decoded ? "  " + sig.payload : "  [undecoded — queue a decode_signal order]");
+      e.className = "sigrow";
+      var txt = document.createElement("span");
+      txt.textContent = (sig.decoded ? "✓ " : "· ") + sig.from + "  t" + sig.emitted_t + "→t" + sig.received_t +
+        (sig.decoded ? "  " + sig.payload : "  [undecoded]");
+      e.appendChild(txt);
+      if (!sig.decoded) {
+        var b = document.createElement("button");
+        b.className = "btn";
+        b.textContent = "stage decode · 1 AP";
+        b.addEventListener("click", function () {
+          stageOrder({ kind: "decode_signal" }, "decode_signal (" + sig.from + ")", 1);
+        });
+        e.appendChild(b);
+      }
       box.appendChild(e);
     });
   }
@@ -407,6 +651,17 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderSignals(sys.signals);
       renderStarmap();
 
+      lastSelf = self;
+      lastSys = sys;
+      tempPreview();
+      renderQueue();
+      loadPending();
+      var rep = document.getElementById("h-repair");
+      if (sys.damaged) rep.classList.remove("hidden"); else rep.classList.add("hidden");
+      var buildBtn = document.getElementById("h-build");
+      buildBtn.disabled = (flows.store_eu ?? 0) < 150;
+      buildBtn.title = buildBtn.disabled ? "needs 150 eu in store" : "";
+
       statusEl.classList.remove("err");
       statusEl.textContent = "live · updated " + new Date().toLocaleTimeString();
     } catch (err) {
@@ -416,7 +671,9 @@ export const DASHBOARD_HTML = `<!doctype html>
     }
   }
 
+  var helmWired = false;
   function start() {
+    if (!helmWired) { wireHelm(); helmWired = true; }
     if (timer) clearInterval(timer);
     if (countdownTimer) clearInterval(countdownTimer);
     refresh();
