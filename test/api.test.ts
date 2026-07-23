@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { SystemDO, type Env } from "../src/do/SystemDO.js";
 import { STAGE_LABELS } from "../src/sim/stages.js";
+import { defaultInstincts } from "../src/sim/reflex.js";
+import { genesisState } from "../src/sim/support.js";
 
 // Minimal in-memory DurableObjectState — SystemDO only touches ctx.storage.
-function makeCtx() {
-  const map = new Map<string, unknown>();
+function makeCtx(seed?: Map<string, unknown>) {
+  const map = seed ?? new Map<string, unknown>();
   return {
     storage: {
       get: async (k: string) => map.get(k),
@@ -52,5 +54,29 @@ describe("M1.5: stage labels", () => {
   it("maps stage ids to their nine-fold-climb labels", () => {
     expect(STAGE_LABELS.survive).toBe("Survive (1/9)");
     expect(STAGE_LABELS.connect).toBe("Connect (2/9)");
+  });
+});
+
+describe("migration: v1 state predates the stage engine", () => {
+  it("defaults missing stage/positiveStreak and keeps counting from there", async () => {
+    // Seed a v1 Persisted blob: genesis sim with the two stage-engine fields removed.
+    const sim = genesisState();
+    delete (sim as any).stage;
+    delete (sim as any).positiveStreak;
+    const map = new Map<string, unknown>([
+      ["p", { sim, rules: defaultInstincts(), chain: "genesis" }],
+    ]);
+    const doi = new SystemDO(makeCtx(map), ENV);
+
+    // Reading /state at the persisted tick must surface the defaulted stage.
+    const s0 = await doi.fetch(new Request("https://do/state?toTick=0"));
+    const b0 = (await s0.json()) as { sim: { stage: string; positiveStreak: number } };
+    expect(b0.sim.stage).toBe("survive");
+    expect(b0.sim.positiveStreak).toBe(0);
+
+    // One positive tick advances the streak from the repaired baseline.
+    const s1 = await doi.fetch(new Request("https://do/state?toTick=1"));
+    const b1 = (await s1.json()) as { sim: { positiveStreak: number } };
+    expect(b1.sim.positiveStreak).toBe(1);
   });
 });

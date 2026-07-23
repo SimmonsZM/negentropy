@@ -27,7 +27,15 @@ export class SystemDO {
 
   private async load(): Promise<Persisted> {
     const p = await this.ctx.storage.get<Persisted>("p");
-    if (p) return p;
+    if (p) {
+      // Migrate v1 blobs that predate the stage engine: default missing fields
+      // and persist the repaired blob back only if a default was actually applied.
+      let repaired = false;
+      if (p.sim.stage === undefined) { p.sim.stage = "survive"; repaired = true; }
+      if (p.sim.positiveStreak === undefined) { p.sim.positiveStreak = 0; repaired = true; }
+      if (repaired) await this.ctx.storage.put("p", p);
+      return p;
+    }
     const fresh: Persisted = { sim: genesisState(), rules: defaultInstincts(), chain: "genesis" };
     await this.ctx.storage.put("p", fresh);
     return fresh;
