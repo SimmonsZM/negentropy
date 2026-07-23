@@ -131,6 +131,10 @@ export interface SimState {
   gotHail: boolean;
   harmonize?: { startedTick: number; endTick: number; events: TrialEvent[]; violated: boolean; netStore: number };
   harmonizeCooldownUntil: number;
+  sanctify?: { whisperAt: number; windowEnd: number; events: TrialEvent[]; open: boolean }; // the Whisper (M2i)
+  sanctifyCooldownUntil: number;
+  bargainDebtUntil: number; // ticks the levy burns store into heat
+  handsOffStreak: number; // toward Complete (9/9)
   turbulence?: { since: number; recovery: number }; // dao-heart turbulence (M2f)
   forecasts: Forecast[]; // Foresight registry (M2e) — Mirror Sight required
   forecastSeq: number;
@@ -154,6 +158,7 @@ export type Order =
   | { kind: "decode_signal" }
   | { kind: "begin_migration" }
   | { kind: "begin_harmonize" }
+  | { kind: "accept_bargain" }
   | { kind: "send_hail"; to: string; text: string }
   | { kind: "register_forecast"; claim: { type: "flare_within"; window: number }; p_milli: number }
   | { kind: "refine_alloy" }

@@ -10,7 +10,9 @@ import {
   LEAK_PER_MILLE, MIGRATION_AP, MIGRATION_BAR, MIGRATION_COOLDOWN, MIGRATION_EU, MIGRATION_WINDOW,
   BOOK_MAX_OPEN, BOOK_QTY_MAX, BUILD_RADIATOR_ALLOY, BURN_FLUX_MULT_MILLI, BURN_ISO_COST, CARGO_MAX_PER_SHIPMENT,
   FLARE_RING_MAX, FORECAST_MAX_ACTIVE, FORECAST_PTS, FORECAST_WINDOW_MAX, HAIL_MAX_CHARS, ISO_YIELD_DIV,
-  HARMONIZE_COOLDOWN, HARMONIZE_EVENTS, HARMONIZE_WINDOW, ORDER_COST, PRICE_MILLI_MAX, PRICE_MILLI_MIN, REFINE_ALLOY_BASE, REFINE_EU,
+  BARGAIN_GRANT_EU, BARGAIN_LEVY_EU, BARGAIN_LEVY_TICKS,
+  HARMONIZE_COOLDOWN, HARMONIZE_EVENTS, HARMONIZE_WINDOW, SANCTIFY_COOLDOWN,
+  WHISPER_DELAY_MIN, WHISPER_DELAY_SPAN, WHISPER_EVENTS, WHISPER_WINDOW, ORDER_COST, PRICE_MILLI_MAX, PRICE_MILLI_MIN, REFINE_ALLOY_BASE, REFINE_EU,
   forecastScore, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
@@ -156,11 +158,35 @@ export function resolve(
   }
   if (s.forecasts.length > 32) s.forecasts.splice(0, s.forecasts.length - 32); // keep recent history only
 
+  // ---- Sanctify: the Whisper's window (M2i) ----
+  let sanctifyPassed = false;
+  const whisperOpen = !!s.sanctify && s.sanctify.open && t >= s.sanctify.whisperAt && t <= s.sanctify.windowEnd;
+  if (s.sanctify && s.sanctify.open && t === s.sanctify.whisperAt) {
+    pushLog(s, `[t${t}] THE HOLLOW WHISPERS — ${BARGAIN_GRANT_EU} eu, freely given. One order. The window closes at t${s.sanctify.windowEnd}.`);
+  }
+  if (s.sanctify && s.sanctify.open && t > s.sanctify.windowEnd) {
+    // Silence was the answer. The storms were survived — or they were not.
+    if (s.store_eu > 0 && !s.damaged) {
+      sanctifyPassed = true;
+      pushLog(s, `[t${t}] the Whisper fades unanswered — the Hollow finds nothing in you to hold`);
+    } else {
+      s.sanctifyCooldownUntil = t + SANCTIFY_COOLDOWN;
+      pushLog(s, `[t${t}] the Whisper fades — but the storms broke you. The Hollow will return after t${s.sanctifyCooldownUntil}.`);
+    }
+    s.sanctify = undefined;
+  }
+
   const trialActive = !!s.trial && t > s.trial.startedTick && t <= s.trial.endTick;
   const harmActive = !!s.harmonize && t > s.harmonize.startedTick && t <= s.harmonize.endTick;
   const mods = trialActive ? trialModsFor(s.trial!.events, t)
     : harmActive ? trialModsFor(s.harmonize!.events, t)
+    : whisperOpen ? trialModsFor(s.sanctify!.events, t)
     : CALM;
+  if (whisperOpen) {
+    for (const ev of s.sanctify!.events) {
+      if (ev.tick === t) pushLog(s, `[t${t}] THE STORM IN THE WHISPER — ${EVENT_NAMES[ev.kind]}`);
+    }
+  }
   if (trialActive) {
     for (const ev of s.trial!.events) {
       if (ev.tick === t) pushLog(s, `[t${t}] TRIAL EVENT — ${EVENT_NAMES[ev.kind]}`);
@@ -382,6 +408,19 @@ export function resolve(
       hEvents.sort((a, b) => a.tick - b.tick || (a.kind < b.kind ? -1 : 1));
       s.harmonize = { startedTick: t, endTick: t + HARMONIZE_WINDOW, events: hEvents, violated: false, netStore: 0 };
       pushLog(s, `[t${t}] HARMONIZE BEGINS — hands off the helm; let the reflexes hold for ${HARMONIZE_WINDOW} ticks`);
+    } else if (o.kind === "accept_bargain") {
+      if (!whisperOpen) {
+        pushLog(s, `[t${t}] accept_bargain rejected — nothing is being offered`);
+        continue;
+      }
+      s.sanctify = undefined; // the window closes on your answer
+      s.bargainDebtUntil = t + BARGAIN_LEVY_TICKS;
+      s.sanctifyCooldownUntil = t + SANCTIFY_COOLDOWN;
+      euIn += BARGAIN_GRANT_EU; // next-books money, like everything owed
+      if (!s.turbulence) {
+        s.turbulence = { since: t, recovery: 0 };
+      }
+      pushLog(s, `[t${t}] THE BARGAIN IS STRUCK — ${BARGAIN_GRANT_EU} eu from nowhere. The debt begins. DAO-HEART TURBULENCE.`);
     } else if (o.kind === "refine_alloy") {
       if (spendable() < REFINE_EU) {
         pushLog(s, `[t${t}] refine_alloy rejected — needs ${REFINE_EU} eu (have ${s.store_eu})`);
@@ -628,6 +667,18 @@ export function resolve(
   }
   // Repair is deliberate — a repair_systems order, never automatic.
 
+  // The Hollow's levy: work becomes waste heat, tick after tick (M2i).
+  // Store -> bank is an internal transfer: the invariant holds untouched,
+  // and the heat is REAL — the debt can cook the unprepared.
+  if (t <= s.bargainDebtUntil) {
+    const levy = Math.min(BARGAIN_LEVY_EU, Math.max(0, s.store_eu));
+    if (levy > 0) {
+      s.store_eu -= levy;
+      s.heatBank_eu += levy;
+      pushLog(s, `[t${t}] the debt burns — ${levy} eu of work into waste heat (until t${s.bargainDebtUntil})`);
+    }
+  }
+
   // ---- Conservation invariant (anti-cheat is physics, GDD §12.0) ----
   const dStore = s.store_eu - store0;
   const dBank = s.heatBank_eu - bank0;
@@ -744,6 +795,9 @@ export function resolve(
         s.realm = "foundation";
         s.stage = "survive";
         s.positiveStreak = 0;
+        s.sanctify = undefined;
+        s.sanctifyCooldownUntil = 0;
+        s.handsOffStreak = 0;
         justAscended = true;
         pushLog(s, `[t${t}] BREAKTHROUGH — FOUNDATION. Mirror Sight opens: what ran you is now yours to author.`);
         pushLog(s, `[t${t}] Foundation — Survive (1/9). The climb begins again, higher.`);
@@ -774,7 +828,7 @@ export function resolve(
       pushLog(s, `[t${t}] HARMONIZE VERDICT — ${passed ? "the system held itself" : h.violated ? "voided by hand" : s.damaged ? "it broke" : "it bled"} · net ${h.netStore >= 0 ? "+" : ""}${h.netStore} eu`);
       if (passed) {
         harmonizePassed = true;
-        pushLog(s, `[t${t}] Sanctify (8/9) lies beyond the veil — a future sky`);
+
       } else {
         s.harmonizeCooldownUntil = t + HARMONIZE_COOLDOWN;
         if (!s.turbulence) {
@@ -868,13 +922,33 @@ export function resolve(
       calAvg_milli: s.calibration.n ? Math.floor(s.calibration.total_milli / s.calibration.n) : 0,
       calSpan: 0, // filled below
       harmonizePassed,
+      sanctifyPassed,
+      handsOffStreak: s.handsOffStreak,
     };
+    // Complete (9/9): the realm holds without you. Manual silence + solvency.
+    s.handsOffStreak = orders.length === 0 && dStore >= 0 ? s.handsOffStreak + 1 : 0;
+    snap.handsOffStreak = s.handsOffStreak;
+
     // Calibration span from resolved forecasts still in the window we keep.
     const resolved = s.forecasts.filter((f) => f.outcome !== undefined);
     if (resolved.length >= 2) snap.calSpan = resolved[resolved.length - 1].resolves_t - resolved[0].resolves_t;
 
     const before = s.stage;
     const stageStep = advanceStage(s.stage, s.positiveStreak, snap, t);
+    // The Hollow notices arrival at the eighth rung — and returns after failure.
+    const nowSanctify = stageStep.stage === "sanctify";
+    if (nowSanctify && !s.sanctify && t >= s.sanctifyCooldownUntil) {
+      const wSeed = mix(seedKey, t ^ 0x5a11);
+      const whisperAt = t + WHISPER_DELAY_MIN + roll(wSeed, t, 0xc0, WHISPER_DELAY_SPAN);
+      const wEvents: TrialEvent[] = [];
+      for (let i = 0; i < WHISPER_EVENTS; i++) {
+        const evTick = whisperAt + roll(wSeed, t, 0xd0 + i, WHISPER_WINDOW);
+        const kindRoll = roll(wSeed, t, 0xe8 + i, 3);
+        wEvents.push({ tick: evTick, kind: kindRoll === 0 ? "flare_echo" : kindRoll === 1 ? "impurity" : "panel_fault" });
+      }
+      wEvents.sort((a, b) => a.tick - b.tick || (a.kind < b.kind ? -1 : 1));
+      s.sanctify = { whisperAt, windowEnd: whisperAt + WHISPER_WINDOW - 1, events: wEvents, open: true };
+    }
     s.stage = stageStep.stage;
     s.positiveStreak = stageStep.positiveStreak;
     if (stageStep.completedLog) pushLog(s, stageStep.completedLog);
@@ -889,6 +963,10 @@ export function resolve(
     } else if (before === "understand" && s.stage === "understand" && understandGateMet(snap)) {
       s.stage = "harmonize";
       pushLog(s, `[t${t}] STAGE COMPLETE: Understand — your map matched the territory`);
+    } else if (before === "sanctify" && s.stage === "complete") {
+      s.handsOffStreak = 0; // the capstone's silence counts from the summit, not the climb
+    } else if (s.stage === "complete" && before === "complete" && snap.handsOffStreak === 16) {
+      pushLog(s, `[t${t}] EMBODIED COMPLETE — sixteen silent ticks. The realm holds without you. The ladder is climbed.`);
     }
   }
 

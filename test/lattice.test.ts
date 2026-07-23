@@ -68,7 +68,7 @@ describe("M2f: the Harmonize crucible", () => {
     for (let i = 0; i < HARMONIZE_WINDOW; i++) s = resolve(s, [], RULES, SEED);
     const log = s.log.join("\n");
     expect(log).toContain("HARMONIZE VERDICT — the system held itself");
-    expect(log).toContain("Sanctify (8/9) lies beyond the veil");
+    expect(log).toContain("STAGE COMPLETE: Harmonize");
     expect(s.harmonizeCooldownUntil).toBe(0);
 
     let v = at("harmonize", { realm: "foundation", store_eu: 4000 });

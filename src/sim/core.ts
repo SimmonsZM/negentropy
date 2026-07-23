@@ -23,6 +23,7 @@ export const ORDER_COST: Record<string, number> = {
   place_order: 1,
   cancel_order: 1,
   fill_order: 2,
+  accept_bargain: 0, // temptation is always affordable
   begin_harmonize: 2,
   noop: 0,
 };
@@ -71,6 +72,16 @@ export const BOOK_MAX_OPEN = 8; // open orders per system book
 export const BOOK_QTY_MAX = 500;
 export const PRICE_MILLI_MIN = 1; // milli-eu per unit
 export const PRICE_MILLI_MAX = 100000;
+
+// ---- Sanctify (M2i): the Whisper from the Hollow ----
+export const WHISPER_DELAY_MIN = 8; // ticks after reaching Sanctify before it comes
+export const WHISPER_DELAY_SPAN = 8; // seeded 0..7 extra
+export const WHISPER_WINDOW = 6; // ticks the bargain stays open — also the storm
+export const WHISPER_EVENTS = 2; // seeded perturbations inside the window
+export const BARGAIN_GRANT_EU = 1500; // what the Hollow offers, next-books money
+export const BARGAIN_LEVY_EU = 100; // per tick, store burned to waste heat
+export const BARGAIN_LEVY_TICKS = 20; // the debt outlives the pleasure
+export const SANCTIFY_COOLDOWN = 28; // a fallen heart waits a week
 
 /** Proper log score, integer-only: points = round(1000·log2(2p)).
  * p_milli must be one of the table keys (50..950 step 50). If the claim is

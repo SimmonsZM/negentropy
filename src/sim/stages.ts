@@ -6,10 +6,10 @@
 
 export type Stage =
   | "survive" | "connect" | "control" | "belong"
-  | "achieve" | "understand" | "harmonize";
+  | "achieve" | "understand" | "harmonize" | "sanctify" | "complete";
 
 export const STAGE_ORDER: Stage[] = [
-  "survive", "connect", "control", "belong", "achieve", "understand", "harmonize",
+  "survive", "connect", "control", "belong", "achieve", "understand", "harmonize", "sanctify", "complete",
 ];
 
 export function stageIndex(s: Stage): number {
@@ -28,7 +28,13 @@ export const STAGE_LABELS: Record<Stage, string> = {
   achieve: "Achieve (5/9)",
   understand: "Understand (6/9)",
   harmonize: "Harmonize (7/9)",
+  sanctify: "Sanctify (8/9)",
+  complete: "Complete (9/9)",
 };
+
+/** Complete (9): the realm holds without you — consecutive manual-silent,
+ * non-negative ticks (Deep Dive §14's capstone shape). */
+export const COMPLETE_HANDSOFF_TARGET = 16;
 
 // ---- Realms ----
 
@@ -72,6 +78,8 @@ export interface StageSnapshot {
   calAvg_milli: number; // total/n, floored
   calSpan: number; // last resolved tick − first resolved tick
   harmonizePassed: boolean; // a clean Harmonize window closed this tick
+  sanctifyPassed: boolean; // the whisper lapsed unaccepted, storms survived
+  handsOffStreak: number; // consecutive ticks with zero manual orders and dStore >= 0
 }
 
 export interface StageResult {
@@ -126,7 +134,17 @@ export function advanceStage(
       // (understandGateMet); harmonizePassed feeds the FUTURE Sanctify gate.
       return { stage, positiveStreak };
     case "harmonize":
-      return { stage, positiveStreak }; // the ceiling, for now
+      if (ev.harmonizePassed) {
+        return done("sanctify", "Harmonize — the system balanced itself while you watched");
+      }
+      return { stage, positiveStreak };
+    case "sanctify":
+      if (ev.sanctifyPassed) {
+        return done("complete", "Sanctify — the Hollow whispered, and you did not answer");
+      }
+      return { stage, positiveStreak };
+    case "complete":
+      return { stage, positiveStreak }; // the ladder's top — the realm is yours
   }
 }
 

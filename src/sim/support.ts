@@ -41,6 +41,9 @@ export function genesisState(): SimState {
     bookSeq: 0,
     committedEu: 0,
     reflexEvents: [],
+    sanctifyCooldownUntil: 0,
+    bargainDebtUntil: 0,
+    handsOffStreak: 0,
     burnActive: false,
   };
 }

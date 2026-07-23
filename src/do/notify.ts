@@ -17,6 +17,10 @@ const NOTABLE: RegExp[] = [
   /THERMAL RUNAWAY/,
   /radiator panel failure/,
   /INSTINCT/,
+  /HOLLOW WHISPERS/,
+  /BARGAIN IS STRUCK/,
+  /EMBODIED COMPLETE/,
+  /Whisper fades/,
 ];
 
 export const WEBHOOK_MAX_FAILURES = 5;
