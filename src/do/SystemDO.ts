@@ -118,6 +118,7 @@ export class SystemDO {
       const t = p.sim.tick + 1;
       const stageBefore = p.sim.stage;
       const realmBefore = p.sim.realm;
+      const retroBefore = p.sim.retrospectivePublished;
       const orders = (await this.ctx.storage.get<Order[]>(`orders:${t}`)) ?? [];
 
       // This tick's mail: deterministic order (deliver_at, from, emitted_t).
@@ -172,16 +173,23 @@ export class SystemDO {
           if (p.sim.realm === realmBefore) await report(`${stageBefore}_${p.sim.realm}`);
         }
       }
-      // The capstone has no exit transition: it fires on the sixteenth
-      // silent tick at the summit. The registry dedupes repeats.
-      if (p.sim.stage === "complete" && p.sim.handsOffStreak === 16) {
-        const reg = this.env.REGISTRY_DO.get(this.env.REGISTRY_DO.idFromName("registry"));
+      // Phase 0 rewire: sixteen silent ticks earn STEADY HAND (an honor);
+      // the ladder CLOSES on the published retrospective — that is complete_*.
+      // The registry dedupes repeats of both.
+      const lateReport = async (featId: string) => {
         try {
-          await reg.fetch("https://do/feat", {
+          const regFeats = this.env.REGISTRY_DO.get(this.env.REGISTRY_DO.idFromName("registry"));
+          await regFeats.fetch("https://do/feat", {
             method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ systemId: p.systemId, featId: `complete_${p.sim.realm}`, t }),
+            body: JSON.stringify({ systemId: p.systemId, featId, t }),
           });
         } catch { /* best-effort */ }
+      };
+      if (p.sim.stage === "complete" && p.sim.handsOffStreak === 16) {
+        await lateReport(`steady_hand_${p.sim.realm}`);
+      }
+      if (p.sim.retrospectivePublished && !retroBefore) {
+        await lateReport(`complete_${p.sim.realm}`);
       }
 
       // Mirror Sight's prize: once Foundation is reached, the instincts are

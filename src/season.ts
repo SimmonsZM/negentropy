@@ -12,10 +12,10 @@ export interface FeatDef {
 export const FEATS: Record<string, number> = {
   survive_embodied: 10, connect_embodied: 15, control_embodied: 20, belong_embodied: 25,
   achieve_embodied: 40, understand_embodied: 60, harmonize_embodied: 80,
-  sanctify_embodied: 120, complete_embodied: 200,
+  sanctify_embodied: 120, steady_hand_embodied: 60, complete_embodied: 200,
   survive_foundation: 20, connect_foundation: 30, control_foundation: 40, belong_foundation: 50,
   achieve_foundation: 80, understand_foundation: 120, harmonize_foundation: 160,
-  sanctify_foundation: 240, complete_foundation: 400,
+  sanctify_foundation: 240, steady_hand_foundation: 120, complete_foundation: 400,
   migration_pass: 300,
 };
 
