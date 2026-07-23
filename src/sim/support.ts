@@ -27,6 +27,10 @@ export function genesisState(): SimState {
     outbox: [],
     realm: "embodied",
     migrationCooldownUntil: 0,
+    forecasts: [],
+    forecastSeq: 0,
+    flareRing: [],
+    calibration: { n: 0, total_milli: 0 },
   };
 }
 

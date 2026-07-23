@@ -16,6 +16,7 @@ export const ORDER_COST: Record<string, number> = {
   decode_signal: 1,
   begin_migration: 10,
   send_hail: 1,
+  register_forecast: 1,
   noop: 0,
 };
 
@@ -38,6 +39,26 @@ export const MIGRATION_EU = 400; // the upload's embodied cost (books to built_e
 export const MIGRATION_BAR = 1200; // absolute wealth bar over the window — judgment, not just a dead mirror
 export const MIGRATION_COOLDOWN = 28; // ticks (1 week) between attempts
 export const TRIAL_EVENTS = 3; // seeded perturbations per window, identical for you and the copy
+
+// ---- Foresight (M2e): the registry of claims ----
+export const FORECAST_MAX_ACTIVE = 8;
+export const FORECAST_WINDOW_MAX = 28; // ticks — Foundation's horizon
+export const FLARE_RING_MAX = 64; // remembered flare ticks for claim resolution
+
+/** Proper log score, integer-only: points = round(1000·log2(2p)).
+ * p_milli must be one of the table keys (50..950 step 50). If the claim is
+ * true you earn PTS[p]; if false, PTS[1000−p]. Honesty maximizes expectation —
+ * that is the whole pedagogy. */
+export const FORECAST_PTS: Record<number, number> = {
+  50: -3322, 100: -2322, 150: -1737, 200: -1322, 250: -1000,
+  300: -737, 350: -515, 400: -322, 450: -152, 500: 0,
+  550: 138, 600: 263, 650: 379, 700: 485, 750: 585,
+  800: 678, 850: 766, 900: 848, 950: 926,
+};
+
+export function forecastScore(p_milli: number, outcome: boolean): number {
+  return outcome ? FORECAST_PTS[p_milli] : FORECAST_PTS[1000 - p_milli];
+}
 
 // Bumped when the tick function's semantics change; folded into the audit
 // chain so a version drift is tamper-evident, not silent (Deep Dive §1).

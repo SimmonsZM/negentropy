@@ -102,6 +102,7 @@ export default {
           ap: sim.ap,
           tick: sim.tick,
           signals: { held: sim.receivedSignals.length, undecoded, decoded_from: sim.decodedFrom },
+          calibration: sim.calibration ?? { n: 0, total_milli: 0 },
           trial: sim.trial
             ? { kind: sim.trial.kind, ends_tick: sim.trial.endTick, you: sim.trial.playerWealth, copy: sim.trial.mirror.wealth }
             : null,
@@ -129,6 +130,8 @@ export default {
               bar: 1200,
             }
           : null,
+        forecasts: (sim.forecasts ?? []).slice(-12),
+        calibration: sim.calibration ?? { n: 0, total_milli: 0 },
         realm: sim.realm ?? "embodied",
         stage: sim.stage,
         migration_cooldown_until: sim.migrationCooldownUntil ?? 0,

@@ -17,7 +17,14 @@ export interface Env {
   REGISTRY_DO: DurableObjectNamespace;
   DEV_TOKEN: string;
   WORLD_SEED: string;
+  WORLD_SEED_SECRET?: string; // production: `wrangler secret put WORLD_SEED_SECRET` and the sky stops being open-source
   GENESIS_EPOCH: string;
+}
+
+/** Foresight only means something if the flare schedule is not public.
+ * The repo's WORLD_SEED stays as the dev/test default; the secret wins. */
+export function worldSeed(env: Env): string {
+  return env.WORLD_SEED_SECRET ?? env.WORLD_SEED;
 }
 
 const SNAPSHOT_RING = 12; // ticks of public history kept for lagged observation
@@ -57,6 +64,10 @@ export class SystemDO {
       if (p.sim.outbox === undefined) { p.sim.outbox = []; repaired = true; }
       if (p.sim.realm === undefined) { p.sim.realm = "embodied"; repaired = true; }
       if (p.sim.migrationCooldownUntil === undefined) { p.sim.migrationCooldownUntil = 0; repaired = true; }
+      if (p.sim.forecasts === undefined) { p.sim.forecasts = []; repaired = true; }
+      if (p.sim.forecastSeq === undefined) { p.sim.forecastSeq = 0; repaired = true; }
+      if (p.sim.flareRing === undefined) { p.sim.flareRing = []; repaired = true; }
+      if (p.sim.calibration === undefined) { p.sim.calibration = { n: 0, total_milli: 0 }; repaired = true; }
       if (p.systemId === undefined) { p.systemId = sysParam ?? "wei-9-home"; repaired = true; }
       if (p.inbox === undefined) { p.inbox = []; repaired = true; }
       if (repaired) await this.ctx.storage.put("p", p);
@@ -76,7 +87,7 @@ export class SystemDO {
   private async advanceTo(p: Persisted, toTick: number): Promise<void> {
     const sys = getSystem(p.systemId);
     if (!sys) throw new Error(`unknown system ${p.systemId}`);
-    const seedKey = seedFrom(this.env.WORLD_SEED, sys.id);
+    const seedKey = seedFrom(worldSeed(this.env), sys.id);
 
     while (p.sim.tick < toTick) {
       const t = p.sim.tick + 1;

@@ -281,6 +281,23 @@ export const DASHBOARD_HTML = `<!doctype html>
         <h2>Signals</h2>
         <div id="signals"><div>— nothing held —</div></div>
       </div>
+      <div class="card wide hidden" id="foresight-card" style="margin-top:16px;">
+        <h2>Foresight — the registry of claims</h2>
+        <div class="ctl">
+          <label>flare within</label>
+          <input type="range" id="fc-window" min="1" max="28" step="1" value="8" />
+          <span class="val" id="fc-window-val">8 ticks</span>
+        </div>
+        <div class="ctl">
+          <label>your probability</label>
+          <input type="range" id="fc-p" min="50" max="950" step="50" value="500" />
+          <span class="val" id="fc-p-val">50%</span>
+          <button class="btn" id="fc-q">Register <span class="pill">1 AP</span></button>
+        </div>
+        <div class="sub">Honesty maximizes expected points — that is the entire lesson. Overconfidence is expensive.</div>
+        <div id="fc-list" style="margin-top:8px; font-size:12px;"></div>
+        <div id="fc-cal" class="sub">—</div>
+      </div>
       <div class="card wide" style="margin-top:16px;">
         <h2>Watchtower — get pinged when it matters</h2>
         <div class="ctl">
@@ -503,6 +520,15 @@ export const DASHBOARD_HTML = `<!doctype html>
       }
     });
 
+    var fw = document.getElementById("fc-window");
+    fw.addEventListener("input", function () { set("fc-window-val", fw.value + " ticks"); });
+    var fp = document.getElementById("fc-p");
+    fp.addEventListener("input", function () { set("fc-p-val", (Number(fp.value) / 10) + "%"); });
+    document.getElementById("fc-q").addEventListener("click", function () {
+      stageOrder(
+        { kind: "register_forecast", claim: { type: "flare_within", window: Number(fw.value) }, p_milli: Number(fp.value) },
+        "forecast: flare within " + fw.value + " @ " + (Number(fp.value) / 10) + "%", 1);
+    });
     document.getElementById("wh-save").addEventListener("click", async function () {
       var u = document.getElementById("wh-url").value.trim();
       if (!u) return;
@@ -728,6 +754,25 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderLog(sys.log_tail);
       renderSignals(sys.signals);
       renderTrial(sys, self);
+      var fcard = document.getElementById("foresight-card");
+      if (sys.realm === "foundation") {
+        fcard.classList.remove("hidden");
+        var fl = document.getElementById("fc-list");
+        fl.innerHTML = "";
+        (sys.forecasts || []).slice().reverse().forEach(function (f) {
+          var d = document.createElement("div");
+          d.textContent = "#" + f.id + "  flare within " + f.claim.window + " @ " + (f.p_milli / 10) + "%  " +
+            (f.outcome === undefined ? "· open, resolves t" + f.resolves_t
+              : (f.outcome ? "TRUE" : "FALSE") + "  " + (f.score_milli >= 0 ? "+" : "") + f.score_milli + " pts");
+          fl.appendChild(d);
+        });
+        var cal = sys.calibration || { n: 0, total_milli: 0 };
+        set("fc-cal", cal.n
+          ? "calibration: " + (cal.total_milli >= 0 ? "+" : "") + cal.total_milli + " pts over " + cal.n + " claims (avg " + Math.round(cal.total_milli / cal.n) + ")"
+          : "no resolved claims yet — the registry remembers everything");
+      } else {
+        fcard.classList.add("hidden");
+      }
       renderStarmap();
       api("/v1/webhook").then(function (w) {
         set("wh-status", w.configured

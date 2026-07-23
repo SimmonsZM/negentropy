@@ -27,6 +27,16 @@ export interface MirrorEnt {
   wealth: number;
 }
 
+export interface Forecast {
+  id: number;
+  claim: { type: "flare_within"; window: number }; // v0: own-sky chance claims only
+  p_milli: number; // stated probability of TRUE, from the score table's keys
+  registered_t: number;
+  resolves_t: number;
+  outcome?: boolean;
+  score_milli?: number;
+}
+
 export interface TrialState {
   kind: "migration";
   startedTick: number;
@@ -89,6 +99,10 @@ export interface SimState {
   decodedFrom: string[]; // system ids whose beacons this mind has decoded
   outbox: Envelope[]; // THIS tick's emissions only; DO drains after each resolve
   realm: Realm; // the big ladder (M2b)
+  forecasts: Forecast[]; // Foresight registry (M2e) — Mirror Sight required
+  forecastSeq: number;
+  flareRing: number[]; // recent flare ticks, capped, for claim resolution
+  calibration: { n: number; total_milli: number };
   trial?: TrialState; // active tribulation, if any
   migrationCooldownUntil: number; // tick before which a new attempt is refused
 }
@@ -101,6 +115,7 @@ export type Order =
   | { kind: "decode_signal" }
   | { kind: "begin_migration" }
   | { kind: "send_hail"; to: string; text: string }
+  | { kind: "register_forecast"; claim: { type: "flare_within"; window: number }; p_milli: number }
   | { kind: "noop" };
 
 export const LOG_MAX = 200;

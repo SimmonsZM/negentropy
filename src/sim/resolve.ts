@@ -8,7 +8,8 @@
 import {
   AP_BANK_CAP, AP_PER_TICK, BASE_LOAD_EU, BEACON_INTERVAL_TICKS, BUILD_RADIATOR_EU, ETA_MILLI,
   LEAK_PER_MILLE, MIGRATION_AP, MIGRATION_BAR, MIGRATION_COOLDOWN, MIGRATION_EU, MIGRATION_WINDOW,
-  HAIL_MAX_CHARS, ORDER_COST, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
+  FLARE_RING_MAX, FORECAST_MAX_ACTIVE, FORECAST_PTS, FORECAST_WINDOW_MAX, HAIL_MAX_CHARS, ORDER_COST,
+  forecastScore, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
 } from "./core.js";
@@ -124,6 +125,23 @@ export function resolve(
   const flare = flareActive(seedKey, t, sys.flare_per_mille);
   s.phaseAngle = phaseAngle(t);
   s.ap = Math.min(AP_BANK_CAP, s.ap + AP_PER_TICK);
+
+  if (flare) {
+    s.flareRing.push(t);
+    if (s.flareRing.length > FLARE_RING_MAX) s.flareRing.splice(0, s.flareRing.length - FLARE_RING_MAX);
+  }
+  for (const f of s.forecasts) {
+    if (f.outcome !== undefined || f.resolves_t !== t) continue;
+    const outcome = s.flareRing.some((ft) => ft > f.registered_t && ft <= f.resolves_t);
+    f.outcome = outcome;
+    f.score_milli = forecastScore(f.p_milli, outcome);
+    s.calibration.n += 1;
+    s.calibration.total_milli += f.score_milli;
+    pushLog(s, `[t${t}] FORECAST RESOLVED — "flare within ${f.claim.window}" @ ${f.p_milli / 10}%: ` +
+      `${outcome ? "TRUE" : "FALSE"} · ${f.score_milli >= 0 ? "+" : ""}${f.score_milli} pts · ` +
+      `calibration ${s.calibration.total_milli >= 0 ? "+" : ""}${s.calibration.total_milli} over ${s.calibration.n}`);
+  }
+  if (s.forecasts.length > 32) s.forecasts.splice(0, s.forecasts.length - 32); // keep recent history only
 
   const trialActive = !!s.trial && t > s.trial.startedTick && t <= s.trial.endTick;
   const mods = trialActive ? trialModsFor(s.trial!.events, t) : CALM;
@@ -253,6 +271,35 @@ export function resolve(
       s.ap -= cost;
       hails.push({ from: sys.id, to: o.to, kind: "hail", emitted_t: t, deliver_at: t + lag, payload: text });
       pushLog(s, `[t${t}] hail sent toward ${o.to} — arrives with the light at t${t + lag}`);
+    } else if (o.kind === "register_forecast") {
+      if (s.realm === "embodied") {
+        pushLog(s, `[t${t}] register_forecast rejected — Mirror Sight required (the Migration opens the registry)`);
+        continue;
+      }
+      if (!(o.p_milli in FORECAST_PTS)) {
+        pushLog(s, `[t${t}] register_forecast rejected — probability must be one of 5%..95% in 5% steps`);
+        continue;
+      }
+      const w = o.claim?.window ?? 0;
+      if (o.claim?.type !== "flare_within" || w < 1 || w > FORECAST_WINDOW_MAX) {
+        pushLog(s, `[t${t}] register_forecast rejected — claim must be flare_within 1..${FORECAST_WINDOW_MAX}`);
+        continue;
+      }
+      const active = s.forecasts.filter((f) => f.outcome === undefined).length;
+      if (active >= FORECAST_MAX_ACTIVE) {
+        pushLog(s, `[t${t}] register_forecast rejected — ${FORECAST_MAX_ACTIVE} claims already open`);
+        continue;
+      }
+      s.ap -= cost;
+      s.forecastSeq += 1;
+      s.forecasts.push({
+        id: s.forecastSeq,
+        claim: { type: "flare_within", window: w },
+        p_milli: o.p_milli,
+        registered_t: t,
+        resolves_t: t + w,
+      });
+      pushLog(s, `[t${t}] FORECAST REGISTERED #${s.forecastSeq} — "flare within ${w}" @ ${o.p_milli / 10}% · resolves t${t + w}`);
     }
   }
 
