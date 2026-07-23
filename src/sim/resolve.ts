@@ -12,6 +12,7 @@ import {
   FLARE_RING_MAX, FORECAST_MAX_ACTIVE, FORECAST_PTS, FORECAST_WINDOW_MAX, HAIL_MAX_CHARS, ISO_YIELD_DIV,
   BARGAIN_GRANT_EU, BARGAIN_LEVY_EU, BARGAIN_LEVY_TICKS,
   HARMONIZE_COOLDOWN, HARMONIZE_EVENTS, HARMONIZE_WINDOW, SANCTIFY_COOLDOWN,
+  REFACTOR_LIVE_TICKS, TURBULENCE_MASS_LOSS_MILLE, WHISPER_AMPLITUDE_MILLI,
   WHISPER_DELAY_MIN, WHISPER_DELAY_SPAN, WHISPER_EVENTS, WHISPER_WINDOW, ORDER_COST, PRICE_MILLI_MAX, PRICE_MILLI_MIN, REFINE_ALLOY_BASE, REFINE_EU,
   forecastScore, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX, TRIAL_EVENTS,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
@@ -106,6 +107,16 @@ function actionToOrder(a: Action): Order | null {
   }
 }
 
+/** Half-strength demons (DD §14: minor heart-demon at ×0.5 amplitude). */
+function scaleMods(m: TrialMods, amp_milli: number): TrialMods {
+  return {
+    fluxMult_milli: 1000 + Math.floor(((m.fluxMult_milli - 1000) * amp_milli) / 1000),
+    etaDelta_milli: Math.floor((m.etaDelta_milli * amp_milli) / 1000),
+    panelsOffline: m.panelsOffline, // a dark panel cannot be half-dark
+    dissMult_milli: m.dissMult_milli,
+  };
+}
+
 function trialModsFor(events: TrialEvent[], t: number): TrialMods {
   const mods = { ...CALM };
   for (const ev of events) {
@@ -156,6 +167,7 @@ export function resolve(
     s.calibration.n += 1;
     s.calibration.total_milli += f.score_milli;
     raiseEvent(s, outcome ? "forecast_resolved.true" : "forecast_resolved.false");
+    if (f.score_milli < 0) s.failureLog.bustedForecasts += 1;
     pushLog(s, `[t${t}] FORECAST RESOLVED — "flare within ${f.claim.window}" @ ${f.p_milli / 10}%: ` +
       `${outcome ? "TRUE" : "FALSE"} · ${f.score_milli >= 0 ? "+" : ""}${f.score_milli} pts · ` +
       `calibration ${s.calibration.total_milli >= 0 ? "+" : ""}${s.calibration.total_milli} over ${s.calibration.n}`);
@@ -181,9 +193,15 @@ export function resolve(
   }
   if (s.sanctify && s.sanctify.open && t > s.sanctify.windowEnd) {
     // Silence was the answer. The storms were survived — or they were not.
-    if (s.store_eu > 0 && !s.damaged) {
+    const refactorLive = s.lastReflexRefactorTick > 0
+      && s.lastReflexRefactorTick >= s.sanctifyEnteredAt
+      && t - s.lastReflexRefactorTick >= REFACTOR_LIVE_TICKS;
+    if (s.store_eu > 0 && !s.damaged && refactorLive) {
       sanctifyPassed = true;
       pushLog(s, `[t${t}] the Whisper fades unanswered — the Hollow finds nothing in you to hold`);
+    } else if (s.store_eu > 0 && !s.damaged) {
+      s.sanctifyCooldownUntil = t + SANCTIFY_COOLDOWN;
+      pushLog(s, `[t${t}] the Whisper fades — but you still run on inherited reflexes. Author one, run it live, and it will return.`);
     } else {
       s.sanctifyCooldownUntil = t + SANCTIFY_COOLDOWN;
       pushLog(s, `[t${t}] the Whisper fades — but the storms broke you. The Hollow will return after t${s.sanctifyCooldownUntil}.`);
@@ -195,7 +213,7 @@ export function resolve(
   const harmActive = !!s.harmonize && t > s.harmonize.startedTick && t <= s.harmonize.endTick;
   const mods = trialActive ? trialModsFor(s.trial!.events, t)
     : harmActive ? trialModsFor(s.harmonize!.events, t)
-    : whisperOpen ? trialModsFor(s.sanctify!.events, t)
+    : whisperOpen ? scaleMods(trialModsFor(s.sanctify!.events, t), WHISPER_AMPLITUDE_MILLI)
     : CALM;
   if (whisperOpen) {
     for (const ev of s.sanctify!.events) {
@@ -517,6 +535,10 @@ export function resolve(
       techHeat += tech.h_out_eu; // deferred: heat may not skip the books
       built += tech.x_cost_eu - tech.h_out_eu;
       s.techCooldowns[tech.id] = t + tech.cooldown_ticks;
+      if (!free && !s.techVerbs.includes(tech.verb)) {
+        s.techVerbs.push(tech.verb);
+        pushLog(s, `[t${t}] a new art under your own hand — ${tech.verb} (${s.techVerbs.length}/3 toward Control)`);
+      }
 
       // Mastery by variety: identical contexts decay toward zero (DD §4).
       const sig = `${tech.id}:${flare ? 1 : 0}:${s.turbulence ? 1 : 0}:${s.realm}`;
@@ -555,6 +577,26 @@ export function resolve(
           ? `[t${t}] SENSE — ${tech.line}: next flare at t${seen}`
           : `[t${t}] SENSE — the light folds: no storm within 24 ticks`);
       }
+    } else if (o.kind === "publish_retrospective") {
+      // Complete's solo transmit (GDD §3.2 stage 9): a scored insight
+      // record — your own calibration ledger, published. Mentoring and
+      // first-solves are the other doors; they open in later phases.
+      if (s.stage !== "complete") {
+        pushLog(s, `[t${t}] publish_retrospective rejected — the ninth rung publishes; you are not there`);
+        continue;
+      }
+      if (s.retrospectivePublished) {
+        pushLog(s, `[t${t}] publish_retrospective rejected — the record already stands`);
+        continue;
+      }
+      if (s.calibration.n < 10 || s.calibration.total_milli < 0) {
+        pushLog(s, `[t${t}] publish_retrospective rejected — a retrospective needs ≥10 scored claims, net positive (have ${s.calibration.n}, ${s.calibration.total_milli})`);
+        continue;
+      }
+      s.ap -= cost;
+      s.retrospectivePublished = true;
+      const avg = Math.floor(s.calibration.total_milli / s.calibration.n);
+      pushLog(s, `[t${t}] RETROSPECTIVE PUBLISHED — ${s.calibration.n} claims, avg ${avg} milli. ${s.realm.toUpperCase()} TRANSMITTED — the ladder is climbed, and the climbing is now teachable.`);
     } else if (o.kind === "refine_alloy") {
       if (spendable() < REFINE_EU) {
         pushLog(s, `[t${t}] refine_alloy rejected — needs ${REFINE_EU} eu (have ${s.store_eu})`);
@@ -701,7 +743,10 @@ export function resolve(
   // ---- Seeded radiator panel failure (Deep Dive §2: run hot, run fragile) ----
   const tRad = s.structures.radiators.t_rad_milli;
   if (tRad > RAD_FAIL_TEMP_MILLI) {
-    const pfPerMille = Math.floor((tRad - RAD_FAIL_TEMP_MILLI) / RAD_FAIL_DIVISOR);
+    // DD §2: failure rises as T² — quadratic above the design point,
+    // recalibrated so pf(1200)=0 and pf(2000)=80‰ (the old anchors hold).
+    const trSq = (tRad * tRad - RAD_FAIL_TEMP_MILLI * RAD_FAIL_TEMP_MILLI) / 1_000_000;
+    const pfPerMille = Math.max(0, Math.floor(31.25 * trSq));
     const before = s.structures.radiators.panels;
     let failed = 0;
     for (let i = 0; i < before; i++) {
@@ -714,6 +759,13 @@ export function resolve(
     if (failed > 0) {
       s.structures.radiators.panels = Math.max(0, before - failed);
       pushLog(s, `[t${t}] radiator panel failure at run-temp ${tRad} — ${s.structures.radiators.panels} panels remain`);
+      if (failed * 1000 >= before * TURBULENCE_MASS_LOSS_MILLE) {
+        s.failureLog.panelCascades += 1;
+        if (!s.turbulence) {
+          s.turbulence = { since: t, recovery: 0 };
+          pushLog(s, `[t${t}] DAO-HEART TURBULENCE — a third of the body, gone in one breath`);
+        }
+      }
     }
   }
 
@@ -809,6 +861,7 @@ export function resolve(
     s.damaged = true;
     s.structures.collectors.throttle_milli = 0;
     pushLog(s, `[t${t}] THERMAL RUNAWAY — systems damaged, collectors offline`);
+    s.failureLog.overheats += 1;
     if (!s.turbulence) {
       s.turbulence = { since: t, recovery: 0 };
       pushLog(s, `[t${t}] DAO-HEART TURBULENCE — the horizon narrows until you settle`);
@@ -853,6 +906,7 @@ export function resolve(
   };
   if (flare) pushLog(s, `[t${t}] stellar flare (flux x3)`);
   if (euIn > 0) s.store_eu += euIn; // inbound settlements: next-books money, like all cargo
+  s.lifetimeBuilt_eu += built; // Stewardship: the builder's ledger, forever
 
   // ---- Trial phase (M2b): the mirror walks the same sky ----
   if (beginTrial) {
@@ -951,6 +1005,9 @@ export function resolve(
         s.sanctify = undefined;
         s.sanctifyCooldownUntil = 0;
         s.handsOffStreak = 0;
+        s.techVerbs = [];
+        s.sanctifyEnteredAt = 0;
+        s.retrospectivePublished = false;
         justAscended = true;
         pushLog(s, `[t${t}] BREAKTHROUGH — FOUNDATION. Mirror Sight opens: what ran you is now yours to author.`);
         pushLog(s, `[t${t}] Foundation — Survive (1/9). The climb begins again, higher.`);
@@ -962,6 +1019,7 @@ export function resolve(
           tr.playerWealth < MIGRATION_BAR ? "the bar was not met" :
           "the copy matched you";
         pushLog(s, `[t${t}] THE MIGRATION FAILS — ${why}. The sky closes until t${s.migrationCooldownUntil}.`);
+        s.failureLog.lostTrials += 1;
         if (!s.turbulence) {
           s.turbulence = { since: t, recovery: 0 };
           pushLog(s, `[t${t}] DAO-HEART TURBULENCE — the horizon narrows until you settle`);
@@ -1065,6 +1123,7 @@ export function resolve(
       decodedNew,
       gotHailNew,
       verbsUsed: s.verbsUsed.length,
+      techVerbs: s.techVerbs.length,
       decodedCount: s.decodedFrom.length,
       sentHail: s.sentHail,
       gotHail: s.gotHail,
@@ -1077,6 +1136,8 @@ export function resolve(
       harmonizePassed,
       sanctifyPassed,
       handsOffStreak: s.handsOffStreak,
+      heatMarginOk: s.heatBank_eu * 10 < D0 * 9, // bank under 90% of dissipation
+      retrospectivePublished: s.retrospectivePublished,
     };
     // Complete (9/9): the realm holds without you. Manual silence + solvency.
     s.handsOffStreak = orders.length === 0 && dStore >= 0 ? s.handsOffStreak + 1 : 0;
@@ -1093,14 +1154,22 @@ export function resolve(
     if (nowSanctify && !s.sanctify && t >= s.sanctifyCooldownUntil) {
       const wSeed = mix(seedKey, t ^ 0x5a11);
       const whisperAt = t + WHISPER_DELAY_MIN + roll(wSeed, t, 0xc0, WHISPER_DELAY_SPAN);
+      // The demon is PERSONAL (DD §14): it reads your failure log and
+      // re-manifests the dominant pattern — at half amplitude.
+      const fl = s.failureLog;
+      const dominant: TrialEvent["kind"] =
+        fl.overheats >= fl.bustedForecasts && fl.overheats >= fl.panelCascades ? "flare_echo"
+        : fl.bustedForecasts >= fl.panelCascades ? "impurity"
+        : "panel_fault";
       const wEvents: TrialEvent[] = [];
       for (let i = 0; i < WHISPER_EVENTS; i++) {
         const evTick = whisperAt + roll(wSeed, t, 0xd0 + i, WHISPER_WINDOW);
-        const kindRoll = roll(wSeed, t, 0xe8 + i, 3);
-        wEvents.push({ tick: evTick, kind: kindRoll === 0 ? "flare_echo" : kindRoll === 1 ? "impurity" : "panel_fault" });
+        wEvents.push({ tick: evTick, kind: dominant }); // the demon IS your pattern — always
       }
+      pushLog(s, `[t${t}] something stirs in the Hollow — it has been reading your worst days`);
       wEvents.sort((a, b) => a.tick - b.tick || (a.kind < b.kind ? -1 : 1));
       s.sanctify = { whisperAt, windowEnd: whisperAt + WHISPER_WINDOW - 1, events: wEvents, open: true };
+      if (s.sanctifyEnteredAt === 0) s.sanctifyEnteredAt = t;
     }
     s.stage = stageStep.stage;
     s.positiveStreak = stageStep.positiveStreak;
@@ -1119,7 +1188,7 @@ export function resolve(
     } else if (before === "sanctify" && s.stage === "complete") {
       s.handsOffStreak = 0; // the capstone's silence counts from the summit, not the climb
     } else if (s.stage === "complete" && before === "complete" && snap.handsOffStreak === 16) {
-      pushLog(s, `[t${t}] EMBODIED COMPLETE — sixteen silent ticks. The realm holds without you. The ladder is climbed.`);
+      pushLog(s, `[t${t}] STEADY HAND — sixteen silent ticks; the realm holds without your hands`);
     }
   }
 

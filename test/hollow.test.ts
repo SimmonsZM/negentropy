@@ -42,10 +42,11 @@ describe("The Whisper arrives uninvited, on schedule", () => {
   });
 });
 
-describe("Silence is the answer", () => {
-  it("the prepared ignore the window, survive its storms, and pass to Complete", () => {
+describe("Silence is the answer — but silence alone is not enough", () => {
+  it("the prepared, having AUTHORED, ignore the window and pass to Complete", () => {
     let s = eighthRung();
     s = resolve(s, [], RULES, SEED, HOME);
+    s.lastReflexRefactorTick = s.sanctifyEnteredAt; // the authored rule has run live since arrival
     const end = s.sanctify!.windowEnd;
     s = tickTo(s, end + 1); // straight through, hands off
     const log = s.log.join("\n");
@@ -56,13 +57,28 @@ describe("Silence is the answer", () => {
     expect(s.bargainDebtUntil).toBe(0); // no debt was ever taken
   });
 
-  it("sixteen silent, solvent ticks at the summit close the ladder", () => {
+  it("silence without authorship is refused — inherited reflexes are the demon's second question", () => {
     let s = eighthRung();
+    s = resolve(s, [], RULES, SEED, HOME); // no refactor ever made
+    const end = s.sanctify!.windowEnd;
+    s = tickTo(s, end + 1);
+    expect(s.log.join("\n")).toContain("you still run on inherited reflexes");
+    expect(s.stage).toBe("sanctify");
+    expect(s.sanctifyCooldownUntil).toBeGreaterThan(s.tick - 2);
+  });
+
+  it("sixteen silent ticks earn Steady Hand; the RETROSPECTIVE closes the ladder", () => {
+    let s = eighthRung();
+    s.calibration = { n: 12, total_milli: 3600 }; // a season of honest claims
     s = resolve(s, [], RULES, SEED, HOME);
+    s.lastReflexRefactorTick = s.sanctifyEnteredAt;
     s = tickTo(s, s.sanctify!.windowEnd + 1);
     expect(s.stage).toBe("complete");
     s = tickTo(s, s.tick + 16);
-    expect(s.log.join("\n")).toContain("EMBODIED COMPLETE — sixteen silent ticks");
+    expect(s.log.join("\n")).toContain("STEADY HAND — sixteen silent ticks");
+    s = resolve(s, [{ kind: "publish_retrospective" }], RULES, SEED, HOME);
+    expect(s.log.join("\n")).toContain("EMBODIED TRANSMITTED");
+    expect(s.retrospectivePublished).toBe(true);
   });
 });
 

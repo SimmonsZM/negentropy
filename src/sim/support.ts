@@ -48,6 +48,12 @@ export function genesisState(): SimState {
     usageRing: [],
     techCooldowns: {},
     buffs: { cryo_until: 0, shield_until: 0, weave_next: false, mend_at: 0 },
+    techVerbs: [],
+    failureLog: { overheats: 0, bustedForecasts: 0, lostTrials: 0, panelCascades: 0 },
+    lastReflexRefactorTick: 0,
+    sanctifyEnteredAt: 0,
+    retrospectivePublished: false,
+    lifetimeBuilt_eu: 0,
     burnActive: false,
   };
 }

@@ -3,7 +3,7 @@
 // M2a: the world is a starmap; observation of neighbors is light-lagged.
 
 import { SIM_VERSION, TICK_SECONDS } from "./sim/core.js";
-import { REALM_LABELS, SIGHTS_BY_REALM, SLOTS_BY_REALM, STAGE_LABELS, type Realm, type Stage } from "./sim/stages.js";
+import { REALM_LABELS, SIGHTS_BY_REALM, SLOTS_BY_REALM, STAGE_LABELS, slotsFor, type Realm, type Stage } from "./sim/stages.js";
 import { allSystems, getSystem, laneLag, neighborsOf } from "./sim/starmap.js";
 import { DASHBOARD_HTML } from "./dashboard.js";
 import type { Env } from "./do/SystemDO.js";
@@ -132,7 +132,11 @@ export default {
       for (const h of holders) {
         const r = await stubFor(env, h.systemId).fetch(`https://do/state?sys=${h.systemId}&toTick=${t}`);
         const { sim } = (await r.json()) as any;
-        const wealth =
+        // Stewardship: net exergy CREATED — the lifetime builder's ledger plus
+        // order currently held (store + embodied matter). Destroyed terms
+        // (scarring) arrive with conflict; leak is heaven's tax, not yours.
+        const stewardship =
+          (sim.lifetimeBuilt_eu ?? 0) +
           (sim.store_eu ?? 0) +
           REF_PRICE.panel * (sim.structures?.radiators?.panels ?? 0) +
           REF_PRICE.alloy * ((sim.stock?.alloy ?? 0) + (sim.vault?.alloy ?? 0)) +
@@ -144,10 +148,11 @@ export default {
         }
         rows.push({
           identity: h.identity,
-          wealth_eu: wealth,
+          stewardship_eu: stewardship,
           feats_milli: featMilli,
           calibration_milli: Math.max(0, sim.calibration?.total_milli ?? 0),
-          conduct_milli: 1000,
+          mandate_milli: 0, // taught into existence — Phase 5
+          wallfacer_mult_milli: 1000, // sealed-objective ×1.5 — Phase 8
         });
       }
       return json({
@@ -155,7 +160,7 @@ export default {
         tick: t,
         ends_tick: SEASON_END_TICK,
         ticks_remaining: Math.max(0, SEASON_END_TICK - t),
-        weights: "wealth 50 · feats 20 · calibration 15 · conduct 15",
+        weights: "feats 50 · stewardship 20 · mandate 15 · calibration 15 (DD §11)",
         standings: computeSeason(rows),
       });
     }
@@ -166,7 +171,7 @@ export default {
         return new Response(r.body, r);
       }
       if (req.method === "POST") {
-        const body = ((await readJsonBody(req)) ?? {}) as { action?: string; commit?: string; reveal?: string };
+        const body = ((await readJsonBody(req)) ?? {}) as { action?: string; commit?: string; reveal?: string; salt?: string };
         const r = await registry().fetch("https://do/wallfacer", {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ ...body, identity: ident.name, t }),
@@ -204,6 +209,8 @@ export default {
           aspects: aspectsOf(getSystem(ident.systemId)!),
           mastery: sim.mastery ?? {},
           path: pathOf(sim.mastery ?? {}),
+          tech_verbs: sim.techVerbs ?? [],
+          retrospective_published: sim.retrospectivePublished ?? false,
           techniques: Object.values(TECHNIQUES).map((x) => ({
             id: x.id, verb: x.verb, aspects: x.aspects, x_cost_eu: x.x_cost_eu,
             h_out_eu: x.h_out_eu, cooldown_ticks: x.cooldown_ticks,
@@ -215,7 +222,7 @@ export default {
             : null,
           migration_cooldown_until: sim.migrationCooldownUntil,
           chain_head: chain,
-          rule_slots: { used: rules.length, max: SLOTS_BY_REALM[realm], locked: rules.filter((x: any) => x.locked).length },
+          rule_slots: { used: rules.length, max: slotsFor(realm, sim.stage, !!sim.turbulence), ceiling: SLOTS_BY_REALM[realm], locked: rules.filter((x: any) => x.locked).length },
         });
       }
       // Fog by omission: only Flow-Sight fields leave the server (GDD §12.0, DD §14).

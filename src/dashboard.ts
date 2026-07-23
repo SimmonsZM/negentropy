@@ -275,6 +275,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div id="trib"><div>—</div></div>
         <div class="ctl">
           <button class="btn hot hidden" id="h-migrate">Begin the Migration <span class="pill">10 AP + 400 eu</span></button>
+          <button class="btn hidden" id="h-retro">Publish Retrospective <span class="pill">2 AP</span></button>
         </div>
       </div>
       <div class="card wide" style="margin-top:16px;">
@@ -576,6 +577,9 @@ export const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("h-migrate").addEventListener("click", function () {
       stageOrder({ kind: "begin_migration" }, "BEGIN THE MIGRATION (400 eu)", 10);
     });
+    document.getElementById("h-retro").addEventListener("click", function () {
+      stageOrder({ kind: "publish_retrospective" }, "PUBLISH RETROSPECTIVE", 2);
+    });
     document.getElementById("h-discard").addEventListener("click", function () { staged = []; renderQueue(); });
     document.getElementById("h-send").addEventListener("click", async function () {
       try {
@@ -607,16 +611,20 @@ export const DASHBOARD_HTML = `<!doctype html>
       var text = window.prompt("Your sealed strategy. SAVE THIS TEXT YOURSELF — only its hash leaves this page:");
       if (!text) return;
       try {
-        var seal = await sha256hex(text);
+        var saltBytes = new Uint8Array(16);
+        crypto.getRandomValues(saltBytes);
+        var salt = Array.prototype.map.call(saltBytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+        var seal = await sha256hex(salt + "\\n" + text);
         await apiSend("/v1/wallfacer", "POST", { action: "commit", commit: seal });
-        statusEl.textContent = "sealed · " + seal.slice(0, 12) + "… — keep your text safe";
+        window.alert("SEALED. Save BOTH, or the wall never opens:\\n\\nSALT: " + salt + "\\n\\nTEXT: (what you typed)\\n\\nReveal unlocks 112 ticks (28 days) from now.");
         refresh();
       } catch (e) { statusEl.textContent = "seal failed: " + e.message; }
     });
     document.getElementById("wf-reveal").addEventListener("click", async function () {
       var text = window.prompt("Paste the EXACT text you sealed:");
       if (!text) return;
-      try { await apiSend("/v1/wallfacer", "POST", { action: "reveal", reveal: text }); refresh(); }
+      var salt = window.prompt("Paste your SALT (blank if sealed before the salting era):") || "";
+      try { await apiSend("/v1/wallfacer", "POST", { action: "reveal", reveal: text, salt: salt }); refresh(); }
       catch (e) { statusEl.textContent = "reveal failed: " + e.message; }
     });
     document.getElementById("sect-found").addEventListener("click", async function () {
@@ -838,6 +846,8 @@ export const DASHBOARD_HTML = `<!doctype html>
     var box = document.getElementById("trib");
     var btn = document.getElementById("h-migrate");
     btn.classList.add("hidden");
+    var rbtn = document.getElementById("h-retro");
+    rbtn.classList.toggle("hidden", !(self.stage === "complete" && !self.retrospective_published));
     box.innerHTML = "";
     function line(t, cls) {
       var d = document.createElement("div");

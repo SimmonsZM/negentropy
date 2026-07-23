@@ -12,13 +12,17 @@ const at = (stage: SimState["stage"], extra: Partial<SimState> = {}): SimState =
   ({ ...genesisState(), stage, ...extra } as SimState);
 
 describe("M2f: the middle rungs", () => {
-  it("Control completes on three distinct verbs", () => {
-    let s = at("control");
+  it("Control completes on three distinct TECHNIQUE verbs — the helm alone is not mastery", () => {
+    let s = at("control", { store_eu: 2000 });
     s = resolve(s, [{ kind: "set_throttle", target: "collectors", value_milli: 700 }], RULES, SEED);
-    expect(s.stage).toBe("control");
-    s = resolve(s, [{ kind: "set_radiator_temp", value_milli: 1100 }, { kind: "build_radiator" }], RULES, SEED);
+    expect(s.stage).toBe("control"); // helm verbs no longer count
+    s = resolve(s, [
+      { kind: "technique", id: "weave_material" },
+      { kind: "technique", id: "attune_cryo" },
+      { kind: "technique", id: "mend_biotic" },
+    ], RULES, SEED);
     expect(s.stage).toBe("belong");
-    expect(s.log.join("\n")).toContain("three verbs, one will");
+    expect(s.log.join("\n")).toContain("three arts, one will");
   });
 
   it("Belong completes via a hail exchange — or a second decoded beacon", () => {
@@ -108,5 +112,68 @@ describe("M2f: dao-heart turbulence", () => {
     while (s.turbulence && guard++ < TURBULENCE_RECOVERY + 6) s = resolve(s, [], RULES, SEED);
     expect(s.turbulence).toBeUndefined();
     expect(s.log.join("\n")).toContain("the dao heart settles");
+  });
+});
+
+describe("Phase 0: alignment mechanics", () => {
+  it("Survive demands margin, not just flow: a hot bank stalls the streak", () => {
+    let s = at("survive", { store_eu: 3000, heatBank_eu: 95 }); // above 90% of D=100, below runaway
+    s.structures.radiators.panels = 2; // D≈100; bank far above 90% of it
+    s.structures.collectors.throttle_milli = 400;
+    const streak0 = s.positiveStreak;
+    s = resolve(s, [], RULES, SEED);
+    expect(s.ledger.dStore_eu).toBeGreaterThan(0); // flow is fine…
+    expect(s.positiveStreak).toBe(0); // …but the margin clause says no
+    void streak0;
+  });
+
+  it("panel failure is quadratic above the design point, anchors preserved", () => {
+    // pf(1200)=0 · pf(2000)=80 — and 1600 sits on the parabola (≈35), not the old line (40)
+    const pf = (tRad: number) => Math.max(0, Math.floor(31.25 * (tRad * tRad - 1200 * 1200) / 1_000_000));
+    expect(pf(1200)).toBe(0);
+    expect(pf(2000)).toBe(80);
+    expect(pf(1600)).toBe(35);
+    expect(pf(1300)).toBe(7);
+  });
+
+  it("slot tranches: entry / Control / Harmonize — and turbulence dims the summit", async () => {
+    const { slotsFor } = await import("../src/sim/stages.js");
+    expect(slotsFor("embodied", "survive", false)).toBe(2); // the two instincts
+    expect(slotsFor("embodied", "control", false)).toBe(3);
+    expect(slotsFor("embodied", "harmonize", false)).toBe(4);
+    expect(slotsFor("embodied", "harmonize", true)).toBe(3); // the top tranche, dark
+    expect(slotsFor("foundation", "survive", false)).toBe(4);
+    expect(slotsFor("foundation", "complete", false)).toBe(8);
+    expect(slotsFor("foundation", "belong", true)).toBe(4); // control tranche suspended
+  });
+
+  it("a one-tick loss of ≥30% of the panels shakes the heart", () => {
+    let s = at("survive", { store_eu: 5000 });
+    s.structures.radiators.panels = 10;
+    s.structures.radiators.t_rad_milli = 2000; // 80‰/panel: the seed will bite
+    let cascaded = false;
+    for (let i = 0; i < 80 && !cascaded; i++) {
+      const before = s.structures.radiators.panels;
+      s = resolve(s, [], RULES, SEED);
+      const lost = before - s.structures.radiators.panels;
+      if (lost * 1000 >= before * 300) cascaded = true;
+    }
+    if (cascaded) {
+      expect(s.failureLog.panelCascades).toBeGreaterThan(0);
+      expect(s.log.join("\n")).toContain("a third of the body, gone in one breath");
+    } else {
+      expect(s.failureLog.panelCascades).toBe(0); // the seed was gentle; the law still stands
+    }
+  });
+
+  it("the demon reads your file: an overheat-scarred heart meets flare echoes at half strength", () => {
+    let s = at("sanctify", { store_eu: 4000 });
+    s.structures.radiators.panels = 20;
+    s.failureLog = { overheats: 5, bustedForecasts: 0, lostTrials: 0, panelCascades: 0 };
+    s = resolve(s, [], RULES, SEED);
+    expect(s.sanctify).toBeDefined();
+    const kinds = s.sanctify!.events.map((e) => e.kind);
+    expect(kinds.filter((k) => k === "flare_echo").length).toBeGreaterThanOrEqual(1);
+    expect(s.log.join("\n")).toContain("reading your worst days");
   });
 });

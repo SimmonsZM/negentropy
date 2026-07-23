@@ -4,7 +4,7 @@
 // and a public-view snapshot ring so neighbors can observe you as you WERE.
 
 import { REFLEX_EDIT_COST, SIM_VERSION, seedFrom } from "../sim/core.js";
-import { HORIZON_BY_REALM, SLOTS_BY_REALM } from "../sim/stages.js";
+import { HORIZON_BY_REALM, SLOTS_BY_REALM, slotsFor } from "../sim/stages.js";
 import { defaultInstincts, ruleCost, type NeighborBooks, type Rule } from "../sim/reflex.js";
 import { chargeReflexEdit, resolve } from "../sim/resolve.js";
 import { getSystem, neighborsOf } from "../sim/starmap.js";
@@ -83,6 +83,12 @@ export class SystemDO {
       if (p.sim.usageRing === undefined) { p.sim.usageRing = []; repaired = true; }
       if (p.sim.techCooldowns === undefined) { p.sim.techCooldowns = {}; repaired = true; }
       if (p.sim.buffs === undefined) { p.sim.buffs = { cryo_until: 0, shield_until: 0, weave_next: false, mend_at: 0 }; repaired = true; }
+      if (p.sim.techVerbs === undefined) { p.sim.techVerbs = []; repaired = true; }
+      if (p.sim.failureLog === undefined) { p.sim.failureLog = { overheats: 0, bustedForecasts: 0, lostTrials: 0, panelCascades: 0 }; repaired = true; }
+      if (p.sim.lastReflexRefactorTick === undefined) { p.sim.lastReflexRefactorTick = 0; repaired = true; }
+      if (p.sim.sanctifyEnteredAt === undefined) { p.sim.sanctifyEnteredAt = 0; repaired = true; }
+      if (p.sim.retrospectivePublished === undefined) { p.sim.retrospectivePublished = false; repaired = true; }
+      if (p.sim.lifetimeBuilt_eu === undefined) { p.sim.lifetimeBuilt_eu = 0; repaired = true; }
       if (p.sim.verbsUsed === undefined) { p.sim.verbsUsed = []; repaired = true; }
       if (p.sim.sentHail === undefined) { p.sim.sentHail = false; repaired = true; }
       if (p.sim.gotHail === undefined) { p.sim.gotHail = false; repaired = true; }
@@ -363,8 +369,15 @@ export class SystemDO {
     if (req.method === "PUT" && url.pathname === "/rules") {
       const incoming = (await readJson()) as Rule[] | null;
       if (!incoming || !Array.isArray(incoming)) return json({ error: "invalid JSON body" }, 400);
-      const slots = SLOTS_BY_REALM[p.sim.realm];
-      if (incoming.length > slots) return json({ error: `max ${slots} rules at this realm` }, 400);
+      // Tranches, not cliffs (Phase 0): slots arrive at entry/Control/Harmonize,
+      // and dao-heart turbulence dims the top earned tranche. Existing rules
+      // are never evicted; the ceiling binds only when you try to GROW.
+      const slots = slotsFor(p.sim.realm, p.sim.stage, !!p.sim.turbulence);
+      if (incoming.length > Math.max(slots, p.rules.length)) {
+        return json({ error: p.sim.turbulence
+          ? `a turbulent heart holds ${slots} rules — the top tranche is dark until you settle`
+          : `max ${slots} rules at ${p.sim.stage} (${p.sim.realm}) — the next tranche arrives with the climb` }, 400);
+      }
       for (const locked of p.rules.filter((r) => r.locked)) {
         const match = incoming.find((r) => r.id === locked.id);
         if (!match || stableStringify(match) !== stableStringify(locked)) {
@@ -372,9 +385,17 @@ export class SystemDO {
         }
       }
       if (!chargeReflexEdit(p.sim, REFLEX_EDIT_COST)) return json({ error: "insufficient AP for reflex edit" }, 402);
+      // Sanctify's second half watches this door: rewriting an EXISTING
+      // unlocked rule (or replacing one id with another) is a refactor.
+      const refactored = p.rules.some((old) => {
+        if (old.locked) return false;
+        const now = incoming.find((r) => r.id === old.id);
+        return !now || stableStringify(now) !== stableStringify(old);
+      });
+      if (refactored) p.sim.lastReflexRefactorTick = p.sim.tick;
       p.rules = incoming;
       await this.ctx.storage.put("p", p);
-      return json({ ok: true, ap_remaining: p.sim.ap, cost: incoming.map((r) => ({ id: r.id, complexity: ruleCost(r) })) });
+      return json({ ok: true, ap_remaining: p.sim.ap, slots, refactor_noted: refactored || undefined, cost: incoming.map((r) => ({ id: r.id, complexity: ruleCost(r) })) });
     }
 
     return json({ error: "not found" }, 404);

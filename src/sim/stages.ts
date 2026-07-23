@@ -46,6 +46,21 @@ export const REALM_LABELS: Record<Realm, string> = {
 };
 
 export const SLOTS_BY_REALM: Record<Realm, number> = { embodied: 4, foundation: 8 };
+
+/** Tranches, not cliffs (GDD §3.2): slots arrive at entry, Control, and
+ * Harmonize. Dao-heart turbulence suspends the TOP earned tranche. */
+export function slotsFor(realm: Realm, stage: Stage, turbulent: boolean): number {
+  const plan = realm === "embodied"
+    ? { entry: 2, control: 1, harmonize: 1 } // entry pair are the locked instincts
+    : { entry: 4, control: 2, harmonize: 2 };
+  const idx = stageIndex(stage);
+  let n = plan.entry;
+  let top = plan.entry;
+  if (idx >= stageIndex("control")) { n += plan.control; top = plan.control; }
+  if (idx >= stageIndex("harmonize")) { n += plan.harmonize; top = plan.harmonize; }
+  if (turbulent && idx >= stageIndex("control")) n -= top; // the summit dims first
+  return n;
+}
 export const HORIZON_BY_REALM: Record<Realm, number> = { embodied: 4, foundation: 28 };
 export const SIGHTS_BY_REALM: Record<Realm, string[]> = {
   embodied: ["flow"],
@@ -65,9 +80,11 @@ export const UNDERSTAND_MIN_SPAN = 56; // ticks (2 weeks) between first and last
 /** Everything a gate may look at this tick. Pure data, integers only. */
 export interface StageSnapshot {
   dStore: number;
+  heatMarginOk: boolean; // heat bank below 90% of dissipation (DD §14 stage 1)
   decodedNew: boolean; // a foreign beacon decoded this tick
   gotHailNew: boolean; // a hail from another mind arrived this tick
-  verbsUsed: number; // distinct manual order kinds ever executed
+  verbsUsed: number; // distinct manual order kinds ever executed (legacy)
+  techVerbs: number; // distinct TECHNIQUE verbs under manual order (Control's true gate)
   decodedCount: number;
   sentHail: boolean;
   gotHail: boolean;
@@ -80,6 +97,7 @@ export interface StageSnapshot {
   harmonizePassed: boolean; // a clean Harmonize window closed this tick
   sanctifyPassed: boolean; // the whisper lapsed unaccepted, storms survived
   handsOffStreak: number; // consecutive ticks with zero manual orders and dStore >= 0
+  retrospectivePublished: boolean; // Complete's solo transmit path (M0-align)
 }
 
 export interface StageResult {
@@ -104,7 +122,7 @@ export function advanceStage(
 
   switch (stage) {
     case "survive": {
-      const streak = ev.dStore > 0 ? positiveStreak + 1 : 0;
+      const streak = ev.dStore > 0 && ev.heatMarginOk ? positiveStreak + 1 : 0;
       if (streak >= SURVIVE_STREAK_TARGET) {
         return { ...done("connect", "Survive — the rock holds"), positiveStreak: streak };
       }
@@ -116,8 +134,8 @@ export function advanceStage(
       }
       return { stage, positiveStreak };
     case "control":
-      if (ev.verbsUsed >= 3) {
-        return done("belong", "Control — three verbs, one will");
+      if (ev.techVerbs >= 3) {
+        return done("belong", "Control — three arts, one will");
       }
       return { stage, positiveStreak };
     case "belong":
@@ -144,7 +162,9 @@ export function advanceStage(
       }
       return { stage, positiveStreak };
     case "complete":
-      return { stage, positiveStreak }; // the ladder's top — the realm is yours
+      // Transmit closes the ladder (GDD §3.2 stage 9): mentor (Phase 5),
+      // retrospective (here), or first-solve (Phase 8's objectives).
+      return { stage, positiveStreak };
   }
 }
 

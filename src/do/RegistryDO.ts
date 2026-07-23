@@ -172,12 +172,23 @@ export class RegistryDO {
         const mine = wf[who];
         if (!mine) return json({ error: "nothing was sealed" }, 404);
         if (mine.reveal) return json({ error: "already revealed — the record is immutable" }, 409);
+        const nowT = body.t ?? 0;
+        if (nowT - mine.committed_t < 112) {
+          return json({ error: `the wall keeps its own counsel for 28 days — reveal opens at t${mine.committed_t + 112}` }, 403);
+        }
         const text = body.reveal ?? "";
-        const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-        const hex = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-        if (hex !== mine.commit) return json({ error: "the reveal does not match the seal — that is not what you committed" }, 400);
+        const salt = (body as { salt?: string }).salt ?? "";
+        const digest = async (input: string) => {
+          const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+          return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+        };
+        const salted = await digest(salt + "\n" + text);
+        const legacy = await digest(text); // pre-Phase-0 seals were unsalted
+        if (salted !== mine.commit && legacy !== mine.commit) {
+          return json({ error: "the reveal does not match the seal — that is not what you committed" }, 400);
+        }
         mine.reveal = text;
-        mine.revealed_t = body.t ?? 0;
+        mine.revealed_t = nowT;
         await this.ctx.storage.put("wallfacer", wf);
         return json({ revealed: true });
       }

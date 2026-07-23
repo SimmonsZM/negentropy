@@ -38,38 +38,53 @@ describe("M3a: feat decay — first come, largest share", () => {
   });
 });
 
-describe("M3a: the weights make a whole", () => {
-  it("a spotless leader in every column scores 1000 millipoints; ranks tie-break by name", () => {
+describe("Phase 0: the weights match the book — DD §11 exactly", () => {
+  it("feats 50 · stewardship 20 · mandate 15 · calibration 15; a clean sweep scores 1000", () => {
     const rows = computeSeason([
-      { identity: "wei-9", wealth_eu: 10000, feats_milli: 500000, calibration_milli: 2000, conduct_milli: 1000 },
-      { identity: "li-3", wealth_eu: 5000, feats_milli: 250000, calibration_milli: 0, conduct_milli: 1000 },
+      { identity: "wei-9", stewardship_eu: 10000, feats_milli: 500000, calibration_milli: 2000, mandate_milli: 100, wallfacer_mult_milli: 1000 },
+      { identity: "li-3", stewardship_eu: 5000, feats_milli: 250000, calibration_milli: 0, mandate_milli: 0, wallfacer_mult_milli: 1000 },
     ]);
     expect(rows[0].identity).toBe("wei-9");
-    expect(rows[0].score_milli).toBe(1000); // 500+200+150+150
-    expect(rows[1].score_milli).toBe(250 + 100 + 0 + 150);
+    expect(rows[0].score_milli).toBe(1000); // 500+200+150+150 — the doc's own arithmetic
+    expect(rows[1].score_milli).toBe(250 + 100 + 0 + 0);
     expect(rows[1].rank).toBe(2);
+  });
+
+  it("the sealed-objective multiplier hook scales the whole score", () => {
+    const rows = computeSeason([
+      { identity: "a", stewardship_eu: 100, feats_milli: 100, calibration_milli: 100, mandate_milli: 100, wallfacer_mult_milli: 1500 },
+      { identity: "b", stewardship_eu: 100, feats_milli: 100, calibration_milli: 100, mandate_milli: 100, wallfacer_mult_milli: 1000 },
+    ]);
+    expect(rows[0].identity).toBe("a");
+    expect(rows[0].score_milli).toBe(1500);
+    expect(rows[1].score_milli).toBe(1000);
   });
 });
 
 describe("M3a: the Wallfacer — sealed until its author speaks", () => {
   it("commits once, rejects malformed seals, verifies reveals cryptographically, then freezes", async () => {
     const reg = new RegistryDO(makeCtx().ctx);
-    const wf = (identity: string, body: object) =>
+    const wf = (identity: string, body: object, at = 900) =>
       reg.fetch(new Request("https://do/wallfacer", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ identity, t: 900, ...body }),
+        body: JSON.stringify({ identity, t: at, ...body }),
       }));
 
-    const strategy = "I will lose the wealth race on purpose: every eu into panels until t1100, then run the radiators at 1950 and dare the sky.";
-    const seal = await sha256Hex(strategy);
+    const strategy = "I will lose the stewardship race on purpose: every eu into panels until t1100, then run the radiators at 1950 and dare the sky.";
+    const salt = "a3f9c2e4b8d10577";
+    const seal = await sha256Hex(salt + "\n" + strategy);
 
     expect((await wf("wei-9", { action: "commit", commit: "not-a-hash" })).status).toBe(400);
     expect(((await (await wf("wei-9", { action: "commit", commit: seal })).json()) as any).committed).toBe(true);
     expect((await wf("wei-9", { action: "commit", commit: seal })).status).toBe(409); // one wall per season
 
-    expect((await wf("wei-9", { action: "reveal", reveal: "a different story" })).status).toBe(400); // the seal knows
-    expect(((await (await wf("wei-9", { action: "reveal", reveal: strategy })).json()) as any).revealed).toBe(true);
-    expect((await wf("wei-9", { action: "reveal", reveal: strategy })).status).toBe(409); // immutable
+    // The wall keeps its own counsel: no reveal inside 112 ticks.
+    expect((await wf("wei-9", { action: "reveal", reveal: strategy, salt }, 950)).status).toBe(403);
+
+    expect((await wf("wei-9", { action: "reveal", reveal: "a different story", salt }, 1020)).status).toBe(400); // the seal knows
+    expect((await wf("wei-9", { action: "reveal", reveal: strategy, salt: "wrong-salt" }, 1020)).status).toBe(400); // the salt is half the secret
+    expect(((await (await wf("wei-9", { action: "reveal", reveal: strategy, salt }, 1020)).json()) as any).revealed).toBe(true);
+    expect((await wf("wei-9", { action: "reveal", reveal: strategy, salt }, 1030)).status).toBe(409); // immutable
 
     const all = (await (await reg.fetch(new Request("https://do/wallfacer"))).json()) as any;
     expect(all.wallfacers["wei-9"].reveal).toBe(strategy);

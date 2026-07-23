@@ -127,7 +127,13 @@ export interface SimState {
   decodedFrom: string[]; // system ids whose beacons this mind has decoded
   outbox: Envelope[]; // THIS tick's emissions only; DO drains after each resolve
   realm: Realm; // the big ladder (M2b)
-  verbsUsed: string[]; // distinct manual order kinds ever executed (Control gate)
+  verbsUsed: string[]; // distinct manual order kinds (legacy record)
+  techVerbs: string[]; // distinct technique VERBS under manual order — Control's gate
+  failureLog: { overheats: number; bustedForecasts: number; lostTrials: number; panelCascades: number }; // the heart-demon reads this
+  lastReflexRefactorTick: number; // when an existing rule was last rewritten (Sanctify's second half)
+  sanctifyEnteredAt: number;
+  retrospectivePublished: boolean;
+  lifetimeBuilt_eu: number; // Stewardship's builder ledger
   sentHail: boolean;
   gotHail: boolean;
   harmonize?: { startedTick: number; endTick: number; events: TrialEvent[]; violated: boolean; netStore: number };
@@ -168,6 +174,7 @@ export type Order =
   | { kind: "deposit_vault"; isotopes?: number; alloy?: number }
   | { kind: "withdraw_vault"; isotopes?: number; alloy?: number }
   | { kind: "technique"; id: string }
+  | { kind: "publish_retrospective" }
   | { kind: "send_hail"; to: string; text: string }
   | { kind: "register_forecast"; claim: { type: "flare_within"; window: number }; p_milli: number }
   | { kind: "refine_alloy" }

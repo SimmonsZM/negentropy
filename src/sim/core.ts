@@ -27,6 +27,7 @@ export const ORDER_COST: Record<string, number> = {
   deposit_vault: 1,
   withdraw_vault: 1,
   technique: 2,
+  publish_retrospective: 2,
   begin_harmonize: 2,
   noop: 0,
 };
@@ -85,6 +86,10 @@ export const BARGAIN_GRANT_EU = 1500; // what the Hollow offers, next-books mone
 export const BARGAIN_LEVY_EU = 100; // per tick, store burned to waste heat
 export const BARGAIN_LEVY_TICKS = 20; // the debt outlives the pleasure
 export const SANCTIFY_COOLDOWN = 28; // a fallen heart waits a week
+export const WHISPER_AMPLITUDE_MILLI = 500; // the minor demon runs at half strength (DD §14)
+export const REFACTOR_LIVE_TICKS = 8; // the authored replacement must run live this long
+export const WALLFACER_MIN_AGE_TICKS = 112; // 28 days — the wall keeps its own counsel
+export const TURBULENCE_MASS_LOSS_MILLE = 300; // ≥30% panels lost in one tick shakes the heart
 
 /** Proper log score, integer-only: points = round(1000·log2(2p)).
  * p_milli must be one of the table keys (50..950 step 50). If the claim is
