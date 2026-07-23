@@ -135,6 +135,7 @@ export interface SimState {
   sanctifyCooldownUntil: number;
   bargainDebtUntil: number; // ticks the levy burns store into heat
   handsOffStreak: number; // toward Complete (9/9)
+  vault?: { isotopes: number; alloy: number }; // sect vault — exists only where a hall stands (M2j)
   turbulence?: { since: number; recovery: number }; // dao-heart turbulence (M2f)
   forecasts: Forecast[]; // Foresight registry (M2e) — Mirror Sight required
   forecastSeq: number;
@@ -159,6 +160,8 @@ export type Order =
   | { kind: "begin_migration" }
   | { kind: "begin_harmonize" }
   | { kind: "accept_bargain" }
+  | { kind: "deposit_vault"; isotopes?: number; alloy?: number }
+  | { kind: "withdraw_vault"; isotopes?: number; alloy?: number }
   | { kind: "send_hail"; to: string; text: string }
   | { kind: "register_forecast"; claim: { type: "flare_within"; window: number }; p_milli: number }
   | { kind: "refine_alloy" }

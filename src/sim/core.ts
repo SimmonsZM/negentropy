@@ -24,6 +24,8 @@ export const ORDER_COST: Record<string, number> = {
   cancel_order: 1,
   fill_order: 2,
   accept_bargain: 0, // temptation is always affordable
+  deposit_vault: 1,
+  withdraw_vault: 1,
   begin_harmonize: 2,
   noop: 0,
 };

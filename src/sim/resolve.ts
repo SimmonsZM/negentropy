@@ -421,6 +421,37 @@ export function resolve(
         s.turbulence = { since: t, recovery: 0 };
       }
       pushLog(s, `[t${t}] THE BARGAIN IS STRUCK — ${BARGAIN_GRANT_EU} eu from nowhere. The debt begins. DAO-HEART TURBULENCE.`);
+    } else if (o.kind === "deposit_vault") {
+      const iso = Math.max(0, Math.floor(o.isotopes ?? 0));
+      const al = Math.max(0, Math.floor(o.alloy ?? 0));
+      if (iso + al === 0) { pushLog(s, `[t${t}] deposit_vault rejected — empty hands`); continue; }
+      if (s.stock.isotopes < iso || s.stock.alloy < al) {
+        pushLog(s, `[t${t}] deposit_vault rejected — exceeds stock (have ${s.stock.isotopes} iso, ${s.stock.alloy} alloy)`);
+        continue;
+      }
+      s.ap -= cost;
+      s.vault ??= { isotopes: 0, alloy: 0 };
+      s.stock.isotopes -= iso;
+      s.stock.alloy -= al;
+      s.vault.isotopes += iso;
+      s.vault.alloy += al;
+      pushLog(s, `[t${t}] VAULT DEPOSIT — ${iso} isotopes, ${al} alloy behind the sect's seal`);
+    } else if (o.kind === "withdraw_vault") {
+      const iso = Math.max(0, Math.floor(o.isotopes ?? 0));
+      const al = Math.max(0, Math.floor(o.alloy ?? 0));
+      const v = s.vault ?? { isotopes: 0, alloy: 0 };
+      if (iso + al === 0) { pushLog(s, `[t${t}] withdraw_vault rejected — empty request`); continue; }
+      if (v.isotopes < iso || v.alloy < al) {
+        pushLog(s, `[t${t}] withdraw_vault rejected — the vault holds ${v.isotopes} iso, ${v.alloy} alloy`);
+        continue;
+      }
+      s.ap -= cost;
+      v.isotopes -= iso;
+      v.alloy -= al;
+      s.vault = v;
+      s.stock.isotopes += iso;
+      s.stock.alloy += al;
+      pushLog(s, `[t${t}] VAULT WITHDRAWAL — ${iso} isotopes, ${al} alloy back into working stock`);
     } else if (o.kind === "refine_alloy") {
       if (spendable() < REFINE_EU) {
         pushLog(s, `[t${t}] refine_alloy rejected — needs ${REFINE_EU} eu (have ${s.store_eu})`);

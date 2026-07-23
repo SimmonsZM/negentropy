@@ -13,6 +13,15 @@ export interface Identity {
   created_t: number;
 }
 
+export interface Sect {
+  name: string;
+  charter: string;
+  founder: string; // identity name
+  hall: string; // system id — the vault lives HERE, physically
+  members: string[];
+  created_t: number;
+}
+
 /** Systems a new mind may claim: not beacon worlds, not the first home. */
 function claimable(): string[] {
   return allSystems()
@@ -65,6 +74,60 @@ export class RegistryDO {
       await this.ctx.storage.put("claims", claims);
       await this.ctx.storage.put("names", names);
       return json({ minted: ident, token, note: "this token is shown exactly once" });
+    }
+
+    // ---- Sects (M2j): the banner half — membership. The vault half is
+    // physical state at the hall system, moved only by orders there. ----
+    if (url.pathname === "/sect") {
+      const body = (await (async () => { try { return await req.json(); } catch { return {}; } })()) as
+        { action?: string; identity?: string; name?: string; charter?: string };
+      const sects = (await this.ctx.storage.get<Record<string, Sect>>("sects")) ?? {};
+      const who = (body.identity ?? "").trim();
+      const mine = Object.values(sects).find((x) => x.members.includes(who));
+
+      if (req.method === "GET" || body.action === "mine") {
+        return json({ sect: mine ?? null });
+      }
+      if (req.method !== "POST") return json({ error: "POST required" }, 405);
+
+      if (body.action === "found") {
+        const name = (body.name ?? "").trim();
+        if (!/^[a-z0-9][a-z0-9- ]{2,31}$/.test(name)) return json({ error: "sect name: 3-32 chars, a-z 0-9 - space" }, 400);
+        if (sects[name]) return json({ error: "banner already flies" }, 409);
+        if (mine) return json({ error: `you already serve ${mine.name}` }, 409);
+        const hall = url.searchParams.get("hall") ?? "";
+        if (!hall) return json({ error: "hall required" }, 400);
+        const charter = (body.charter ?? "").slice(0, 500).trim();
+        sects[name] = { name, charter, founder: who, hall, members: [who], created_t: Date.now() };
+        await this.ctx.storage.put("sects", sects);
+        return json({ founded: sects[name] });
+      }
+      if (body.action === "join") {
+        const target = sects[(body.name ?? "").trim()];
+        if (!target) return json({ error: "no such banner" }, 404);
+        if (mine) return json({ error: `you already serve ${mine.name}` }, 409);
+        target.members.push(who);
+        await this.ctx.storage.put("sects", sects);
+        return json({ joined: target });
+      }
+      if (body.action === "leave") {
+        if (!mine) return json({ error: "you serve no banner" }, 404);
+        if (mine.founder === who && mine.members.length > 1) {
+          return json({ error: "a founder cannot abandon a living sect" }, 409);
+        }
+        mine.members = mine.members.filter((m) => m !== who);
+        if (mine.members.length === 0) delete sects[mine.name];
+        await this.ctx.storage.put("sects", sects);
+        return json({ left: true });
+      }
+      return json({ error: "action: found | join | leave | mine" }, 400);
+    }
+
+    if (req.method === "GET" && url.pathname === "/sects") {
+      const sects = (await this.ctx.storage.get<Record<string, Sect>>("sects")) ?? {};
+      return json({
+        sects: Object.values(sects).map((x) => ({ name: x.name, hall: x.hall, members: x.members.length, charter: x.charter })),
+      });
     }
 
     if (req.method === "GET" && url.pathname === "/list") {

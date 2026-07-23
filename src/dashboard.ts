@@ -320,6 +320,19 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div id="fc-cal" class="sub">—</div>
       </div>
       <div class="card wide" style="margin-top:16px;">
+        <h2>Sect — the banner and the vault</h2>
+        <div id="sect-box"><div>—</div></div>
+        <div class="ctl">
+          <button class="btn ghost" id="sect-found">Found a sect</button>
+          <button class="btn ghost" id="sect-join">Join a sect</button>
+          <button class="btn ghost hidden" id="sect-leave">Leave</button>
+        </div>
+        <div class="ctl hidden" id="vault-ctl">
+          <button class="btn" id="v-dep">Deposit to vault <span class="pill">1 AP</span></button>
+          <button class="btn" id="v-wd">Withdraw <span class="pill">1 AP</span></button>
+        </div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
         <h2>Watchtower — get pinged when it matters</h2>
         <div class="ctl">
           <input id="wh-url" type="text" placeholder="https:// webhook URL (paste a Discord webhook — it just works)" style="flex:1; min-width:240px; padding:8px 10px; background:var(--panel2); border:1px solid var(--edge); border-radius:8px; color:var(--ink); font:inherit;" />
@@ -566,6 +579,37 @@ export const DASHBOARD_HTML = `<!doctype html>
       stageOrder(
         { kind: "register_forecast", claim: { type: "flare_within", window: Number(fw.value) }, p_milli: Number(fp.value) },
         "forecast: flare within " + fw.value + " @ " + (Number(fp.value) / 10) + "%", 1);
+    });
+    document.getElementById("sect-found").addEventListener("click", async function () {
+      var nm = window.prompt("Banner name (3-32 chars):");
+      if (!nm) return;
+      var ch = window.prompt("Charter — what does this sect exist to do?") || "";
+      try { await apiSend("/v1/sect", "POST", { action: "found", name: nm.trim().toLowerCase(), charter: ch }); refresh(); }
+      catch (e) { statusEl.textContent = "found failed: " + e.message; }
+    });
+    document.getElementById("sect-join").addEventListener("click", async function () {
+      try {
+        var all = await api("/v1/sects");
+        var names = all.sects.map(function (x) { return x.name + " (" + x.members + " @ " + x.hall + ")"; }).join("\n");
+        var nm = window.prompt("Banners flying:\n" + (names || "— none —") + "\n\nJoin which?");
+        if (!nm) return;
+        await apiSend("/v1/sect", "POST", { action: "join", name: nm.trim().toLowerCase() });
+        refresh();
+      } catch (e) { statusEl.textContent = "join failed: " + e.message; }
+    });
+    document.getElementById("sect-leave").addEventListener("click", async function () {
+      try { await apiSend("/v1/sect", "POST", { action: "leave" }); refresh(); }
+      catch (e) { statusEl.textContent = "leave failed: " + e.message; }
+    });
+    document.getElementById("v-dep").addEventListener("click", function () {
+      var iso = Number(window.prompt("Deposit how many ISOTOPES?") || 0);
+      var al = Number(window.prompt("Deposit how much ALLOY?") || 0);
+      if (iso > 0 || al > 0) stageOrder({ kind: "deposit_vault", isotopes: iso, alloy: al }, "vault deposit (" + iso + " iso, " + al + " alloy)", 1);
+    });
+    document.getElementById("v-wd").addEventListener("click", function () {
+      var iso = Number(window.prompt("Withdraw how many ISOTOPES?") || 0);
+      var al = Number(window.prompt("Withdraw how much ALLOY?") || 0);
+      if (iso > 0 || al > 0) stageOrder({ kind: "withdraw_vault", isotopes: iso, alloy: al }, "vault withdraw (" + iso + " iso, " + al + " alloy)", 1);
     });
     document.getElementById("wh-save").addEventListener("click", async function () {
       var u = document.getElementById("wh-url").value.trim();
@@ -855,6 +899,30 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderSignals(sys.signals);
       renderTrial(sys, self);
       renderExchange();
+      api("/v1/sect").then(function (r) {
+        var box = document.getElementById("sect-box");
+        var leaveB = document.getElementById("sect-leave");
+        var vctl = document.getElementById("vault-ctl");
+        box.innerHTML = "";
+        var d0 = document.createElement("div");
+        if (r.sect) {
+          d0.textContent = "⚑ " + r.sect.name + " — hall at " + r.sect.hall + " — " + r.sect.members.length +
+            " member" + (r.sect.members.length === 1 ? "" : "s") + (r.sect.charter ? ' — "' + r.sect.charter + '"' : "");
+          leaveB.classList.remove("hidden");
+          if (r.sect.founder === self.identity) vctl.classList.remove("hidden"); else vctl.classList.add("hidden");
+          if (sys.vault !== undefined && sys.vault !== null) {
+            var v = document.createElement("div");
+            v.className = "sub";
+            v.textContent = "vault holds: " + (sys.vault.isotopes || 0) + " isotopes, " + (sys.vault.alloy || 0) + " alloy";
+            box.appendChild(d0); box.appendChild(v); return;
+          }
+        } else {
+          d0.textContent = "no banner — found one, or join another mind's";
+          leaveB.classList.add("hidden");
+          vctl.classList.add("hidden");
+        }
+        box.appendChild(d0);
+      }).catch(function () { /* keep last */ });
       var fcard = document.getElementById("foresight-card");
       if (sys.realm === "foundation") {
         fcard.classList.remove("hidden");

@@ -46,6 +46,10 @@ const OPENAPI = {
   },
 } as const;
 
+async function readJsonBody(req: Request): Promise<unknown> {
+  try { return await req.json(); } catch { return null; }
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -78,6 +82,31 @@ export default {
     const homeFetch = (path: string, init?: RequestInit) =>
       stubFor(env, HOME).fetch(`https://do${path}?sys=${HOME}&toTick=${t}`, init);
 
+    const registry = () => env.REGISTRY_DO.get(env.REGISTRY_DO.idFromName("registry"));
+
+    // ---- Sects (M2j): banner at the registry, vault at the hall ----
+    if (url.pathname === "/v1/sect") {
+      if (req.method === "GET") {
+        const r = await registry().fetch("https://do/sect", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "mine", identity: ident.name }),
+        });
+        return new Response(r.body, r);
+      }
+      if (req.method === "POST") {
+        const body = ((await readJsonBody(req)) ?? {}) as { action?: string; name?: string; charter?: string };
+        const r = await registry().fetch(`https://do/sect?hall=${ident.systemId}`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, identity: ident.name }),
+        });
+        return new Response(r.body, r);
+      }
+    }
+    if (req.method === "GET" && url.pathname === "/v1/sects") {
+      const r = await registry().fetch("https://do/sects");
+      return new Response(r.body, r);
+    }
+
     // Admin: mint a new mind. Token is returned exactly once — hand it over.
     if (req.method === "POST" && url.pathname === "/v1/admin/identities") {
       if (!ident.admin) return json({ error: "admin only" }, 403);
@@ -103,6 +132,7 @@ export default {
           tick: sim.tick,
           signals: { held: sim.receivedSignals.length, undecoded, decoded_from: sim.decodedFrom },
           calibration: sim.calibration ?? { n: 0, total_milli: 0 },
+          vault: sim.vault ?? null,
           turbulence: sim.turbulence ?? null,
           trial: sim.trial
             ? { kind: sim.trial.kind, ends_tick: sim.trial.endTick, you: sim.trial.playerWealth, copy: sim.trial.mirror.wealth }
@@ -121,6 +151,7 @@ export default {
         damaged: sim.damaged,
         signals: sim.receivedSignals.slice(-8),
         stock: sim.stock ?? { isotopes: 0, alloy: 0 },
+        vault: sim.vault ?? null,
         trial: sim.trial
           ? {
               kind: sim.trial.kind,
@@ -207,7 +238,21 @@ export default {
 
     if (url.pathname === "/v1/orders") {
       if (req.method === "POST") {
-        return homeFetch("/orders", { method: "POST", body: await req.text(), headers: { "content-type": "application/json" } });
+        const raw = await req.text();
+        let parsed: { orders?: Array<{ kind?: string }> } | null = null;
+        try { parsed = JSON.parse(raw); } catch { /* DO will reject */ }
+        const touchesVault = parsed?.orders?.some((o) => o.kind === "deposit_vault" || o.kind === "withdraw_vault");
+        if (touchesVault) {
+          const sr = await registry().fetch("https://do/sect", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ action: "mine", identity: ident.name }),
+          });
+          const { sect } = (await sr.json()) as { sect: { founder: string; hall: string } | null };
+          if (!sect) return json({ error: "vault orders need a banner — found or join a sect" }, 403);
+          if (sect.founder !== ident.name) return json({ error: "only the founder keeps the vault's seal (roles come later)" }, 403);
+          if (sect.hall !== ident.systemId) return json({ error: `the vault stands at ${sect.hall} — orders must issue from the hall` }, 403);
+        }
+        return homeFetch("/orders", { method: "POST", body: raw, headers: { "content-type": "application/json" } });
       }
       if (req.method === "GET") {
         const r = await homeFetch("/state");
