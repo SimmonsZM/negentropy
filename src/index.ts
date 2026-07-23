@@ -11,6 +11,7 @@ export { SystemDO } from "./do/SystemDO.js";
 export { RegistryDO } from "./do/RegistryDO.js";
 import { sha256Hex } from "./sim/support.js";
 import { FEATS, REF_PRICE, SEASON_END_TICK, SEASON_ID, computeSeason, featPointsMilli, type SeasonComponents } from "./season.js";
+import { aspectsOf, pathOf, TECHNIQUES } from "./sim/aspects.js";
 
 // Identities live in the RegistryDO (M2c). DEV_TOKEN remains the admin key
 // and maps to the founding identity, so the original token keeps working.
@@ -200,6 +201,14 @@ export default {
           signals: { held: sim.receivedSignals.length, undecoded, decoded_from: sim.decodedFrom },
           calibration: sim.calibration ?? { n: 0, total_milli: 0 },
           vault: sim.vault ?? null,
+          aspects: aspectsOf(getSystem(ident.systemId)!),
+          mastery: sim.mastery ?? {},
+          path: pathOf(sim.mastery ?? {}),
+          techniques: Object.values(TECHNIQUES).map((x) => ({
+            id: x.id, verb: x.verb, aspects: x.aspects, x_cost_eu: x.x_cost_eu,
+            h_out_eu: x.h_out_eu, cooldown_ticks: x.cooldown_ticks,
+            mastery_req_milli: x.mastery_req_milli, next_usable: sim.techCooldowns?.[x.id] ?? 0,
+          })),
           turbulence: sim.turbulence ?? null,
           trial: sim.trial
             ? { kind: sim.trial.kind, ends_tick: sim.trial.endTick, you: sim.trial.playerWealth, copy: sim.trial.mirror.wealth }

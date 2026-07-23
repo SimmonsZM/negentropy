@@ -3,6 +3,7 @@
 
 import type { Realm, Stage } from "./stages.js";
 import type { ReflexEvent } from "./reflex.js";
+import type { Aspect } from "./aspects.js";
 
 export interface Structures {
   collectors: { throttle_milli: number }; // 0..1000
@@ -136,6 +137,10 @@ export interface SimState {
   bargainDebtUntil: number; // ticks the levy burns store into heat
   handsOffStreak: number; // toward Complete (9/9)
   vault?: { isotopes: number; alloy: number }; // sect vault — exists only where a hall stands (M2j)
+  mastery: Partial<Record<Aspect, number>>; // milli, grown by variety (M4a)
+  usageRing: string[]; // recent technique contexts — repetition decays here
+  techCooldowns: Record<string, number>; // techId -> next usable tick
+  buffs: { cryo_until: number; shield_until: number; weave_next: boolean; mend_at: number }; // technique effects
   turbulence?: { since: number; recovery: number }; // dao-heart turbulence (M2f)
   forecasts: Forecast[]; // Foresight registry (M2e) — Mirror Sight required
   forecastSeq: number;
@@ -162,6 +167,7 @@ export type Order =
   | { kind: "accept_bargain" }
   | { kind: "deposit_vault"; isotopes?: number; alloy?: number }
   | { kind: "withdraw_vault"; isotopes?: number; alloy?: number }
+  | { kind: "technique"; id: string }
   | { kind: "send_hail"; to: string; text: string }
   | { kind: "register_forecast"; claim: { type: "flare_within"; window: number }; p_milli: number }
   | { kind: "refine_alloy" }

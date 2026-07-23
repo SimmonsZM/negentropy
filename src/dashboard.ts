@@ -179,7 +179,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 
   <div id="app" class="hidden">
     <header>
-      <h1>NEGENTROPY <span class="dim">/ <span id="hdr-identity">…</span></span></h1>
+      <h1>NEGENTROPY <span class="dim">/ <span id="hdr-identity">…</span> <span id="hdr-path" class="dim"></span></span></h1>
       <div style="display:flex; align-items:center; gap:12px;">
         <span id="status">connecting…</span>
         <button id="signout">sign out</button>
@@ -318,6 +318,12 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div class="sub">Honesty maximizes expected points — that is the entire lesson. Overconfidence is expensive.</div>
         <div id="fc-list" style="margin-top:8px; font-size:12px;"></div>
         <div id="fc-cal" class="sub">—</div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
+        <h2>Cultivation — your sky, your arts, your Path</h2>
+        <div class="sub">availability is local physics · mastery grows by variety — repetition teaches nothing</div>
+        <div id="asp-box" style="margin-top:8px; font-size:12px; display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:4px;"></div>
+        <div class="ctl" id="tech-ctl" style="flex-wrap:wrap;"></div>
       </div>
       <div class="card wide" style="margin-top:16px;">
         <h2>Season 0 — the standings</h2>
@@ -931,6 +937,29 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderLog(sys.log_tail);
       renderSignals(sys.signals);
       renderTrial(sys, self);
+      document.getElementById("hdr-path").textContent = self.path ? "· " + self.path : "";
+      (function () {
+        var box = document.getElementById("asp-box");
+        box.innerHTML = "";
+        Object.keys(self.aspects || {}).forEach(function (a) {
+          var e = document.createElement("div");
+          var m = (self.mastery && self.mastery[a]) || 0;
+          e.textContent = a + " — sky " + self.aspects[a] + " · mastery " + m;
+          if (self.aspects[a] < 250) e.style.opacity = "0.4";
+          box.appendChild(e);
+        });
+        var tc = document.getElementById("tech-ctl");
+        if (!tc.dataset.wired) {
+          tc.dataset.wired = "1";
+          (self.techniques || []).forEach(function (x) {
+            var b = document.createElement("button");
+            b.className = "btn";
+            b.innerHTML = x.verb + "(" + x.aspects.join("+") + ") <span class='pill'>2 AP + " + x.x_cost_eu + " eu</span>";
+            b.addEventListener("click", function () { stageOrder({ kind: "technique", id: x.id }, x.id, 2); });
+            tc.appendChild(b);
+          });
+        }
+      })();
       renderExchange();
       api("/v1/season").then(function (sn) {
         var box = document.getElementById("season-box");

@@ -44,6 +44,10 @@ export function genesisState(): SimState {
     sanctifyCooldownUntil: 0,
     bargainDebtUntil: 0,
     handsOffStreak: 0,
+    mastery: {},
+    usageRing: [],
+    techCooldowns: {},
+    buffs: { cryo_until: 0, shield_until: 0, weave_next: false, mend_at: 0 },
     burnActive: false,
   };
 }

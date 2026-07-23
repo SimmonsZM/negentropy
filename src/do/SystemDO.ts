@@ -79,6 +79,10 @@ export class SystemDO {
       if (p.sim.sanctifyCooldownUntil === undefined) { p.sim.sanctifyCooldownUntil = 0; repaired = true; }
       if (p.sim.bargainDebtUntil === undefined) { p.sim.bargainDebtUntil = 0; repaired = true; }
       if (p.sim.handsOffStreak === undefined) { p.sim.handsOffStreak = 0; repaired = true; }
+      if (p.sim.mastery === undefined) { p.sim.mastery = {}; repaired = true; }
+      if (p.sim.usageRing === undefined) { p.sim.usageRing = []; repaired = true; }
+      if (p.sim.techCooldowns === undefined) { p.sim.techCooldowns = {}; repaired = true; }
+      if (p.sim.buffs === undefined) { p.sim.buffs = { cryo_until: 0, shield_until: 0, weave_next: false, mend_at: 0 }; repaired = true; }
       if (p.sim.verbsUsed === undefined) { p.sim.verbsUsed = []; repaired = true; }
       if (p.sim.sentHail === undefined) { p.sim.sentHail = false; repaired = true; }
       if (p.sim.gotHail === undefined) { p.sim.gotHail = false; repaired = true; }

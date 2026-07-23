@@ -18,6 +18,7 @@ import {
   roll,
 } from "./core.js";
 import { bestPrice, evaluate, type Action, type Metrics, type NeighborBooks, type ReflexEvent, type Rule } from "./reflex.js";
+import { aspectsOf, masteryGain, noveltyMilli, MASTERY_MAX, TECHNIQUES, USAGE_RING_MAX } from "./aspects.js";
 import { achieveBarMet, advanceStage, stageIndex, understandGateMet, TURBULENCE_RECOVERY } from "./stages.js";
 import { getSystem, laneLag, neighborsOf, type SystemDef } from "./starmap.js";
 import {
@@ -42,6 +43,7 @@ interface TrialMods {
   fluxMult_milli: number; // flare_echo: 2000
   etaDelta_milli: number; // impurity: -140
   panelsOffline: number; // panel_fault: 1
+  dissMult_milli?: number; // attune_cryo (M4a): the radiators drink the cold
 }
 
 const CALM: TrialMods = { fluxMult_milli: 1000, etaDelta_milli: 0, panelsOffline: 0 };
@@ -76,7 +78,7 @@ function thermoTick(inp: ThermoIn, flux: number, mods: TrialMods, alreadyDamaged
   const newStore = afterGainLeak - baseCost;
 
   const heatProduced = heatConv + leak + baseCost;
-  const D = dissipation(effPanels, inp.t_rad_milli);
+  const D = Math.floor((dissipation(effPanels, inp.t_rad_milli) * (mods.dissMult_milli ?? 1000)) / 1000);
   const totalHeat = inp.heatBank_eu + heatProduced;
   const radiated = Math.min(D, totalHeat);
   const newBank = totalHeat - radiated;
@@ -159,6 +161,17 @@ export function resolve(
       `calibration ${s.calibration.total_milli >= 0 ? "+" : ""}${s.calibration.total_milli} over ${s.calibration.n}`);
   }
   if (s.forecasts.length > 32) s.forecasts.splice(0, s.forecasts.length - 32); // keep recent history only
+
+  // Biotic mend (M4a): the hull knits at the appointed tick — if the heat is gone.
+  if (s.buffs.mend_at > 0 && t >= s.buffs.mend_at) {
+    if (s.damaged && s.heatBank_eu === 0) {
+      s.damaged = false;
+      pushLog(s, `[t${t}] MEND completes — the hull is whole; no hand touched it`);
+    } else if (s.damaged) {
+      pushLog(s, `[t${t}] MEND fizzles — living repair cannot work in that heat`);
+    }
+    s.buffs.mend_at = 0;
+  }
 
   // ---- Sanctify: the Whisper's window (M2i) ----
   let sanctifyPassed = false;
@@ -257,6 +270,7 @@ export function resolve(
   let decodedNew = false; // a foreign beacon was decoded this tick (Connect gate)
   let beginTrial = false;
   let transmitted = 0; // eu beamed out this tick (fills' escrow legs)
+  let techHeat = 0; // arts' waste heat — lands post-thermo, inside the audit
   let euIn = 0; // eu that arrived via fills — lands AFTER this tick's books close
   const hails: Envelope[] = [];
   const spendable = () => s.store_eu - s.committedEu;
@@ -472,6 +486,75 @@ export function resolve(
       s.stock.isotopes += iso;
       s.stock.alloy += al;
       pushLog(s, `[t${t}] VAULT WITHDRAWAL — ${iso} isotopes, ${al} alloy back into working stock`);
+    } else if (o.kind === "technique") {
+      const tech = TECHNIQUES[o.id];
+      if (!tech) { pushLog(s, `[t${t}] technique rejected — no such art`); continue; }
+      const local = aspectsOf(sys);
+      const poor = tech.aspects.find((a) => local[a] < tech.richness_req_milli);
+      if (poor) { pushLog(s, `[t${t}] ${tech.id} rejected — your sky does not speak ${poor} (richness ${local[poor]})`); continue; }
+      if (tech.aspects.includes("biotic") && s.realm !== "embodied" && s.realm !== "foundation") {
+        pushLog(s, `[t${t}] ${tech.id} rejected — biotic arts belong to the embodied realms`);
+        continue;
+      }
+      const unread = tech.aspects.find((a) => (s.mastery[a] ?? 0) < tech.mastery_req_milli);
+      if (unread) { pushLog(s, `[t${t}] ${tech.id} rejected — ${unread} mastery ${s.mastery[unread] ?? 0} < ${tech.mastery_req_milli}`); continue; }
+      if (t < (s.techCooldowns[tech.id] ?? 0)) {
+        pushLog(s, `[t${t}] ${tech.id} rejected — the form needs rest until t${s.techCooldowns[tech.id]}`);
+        continue;
+      }
+      if (spendable() < tech.x_cost_eu) {
+        pushLog(s, `[t${t}] ${tech.id} rejected — needs ${tech.x_cost_eu} eu spendable (have ${spendable()})`);
+        continue;
+      }
+      if (tech.id === "harvest_plasma" && !flare) {
+        pushLog(s, `[t${t}] harvest_plasma rejected — the storm is not here`);
+        continue;
+      }
+      // The exergy accounting of an art: X leaves the store; H becomes waste
+      // heat; the remainder (X − H) is embodied work — books to built.
+      s.ap -= cost;
+      s.store_eu -= tech.x_cost_eu;
+      techHeat += tech.h_out_eu; // deferred: heat may not skip the books
+      built += tech.x_cost_eu - tech.h_out_eu;
+      s.techCooldowns[tech.id] = t + tech.cooldown_ticks;
+
+      // Mastery by variety: identical contexts decay toward zero (DD §4).
+      const sig = `${tech.id}:${flare ? 1 : 0}:${s.turbulence ? 1 : 0}:${s.realm}`;
+      const nov = noveltyMilli(sig, s.usageRing);
+      s.usageRing.push(sig);
+      if (s.usageRing.length > USAGE_RING_MAX) s.usageRing.splice(0, s.usageRing.length - USAGE_RING_MAX);
+      for (const a of tech.aspects) {
+        const gain = masteryGain(nov, local[a]);
+        s.mastery[a] = Math.min(MASTERY_MAX, (s.mastery[a] ?? 0) + gain);
+        if (gain > 0) pushLog(s, `[t${t}] ${a} mastery +${gain} → ${s.mastery[a]} (novelty ${nov})`);
+        else pushLog(s, `[t${t}] ${a} mastery unmoved — repetition teaches nothing`);
+      }
+
+      // The effect itself.
+      if (tech.id === "harvest_plasma") {
+        s.burnActive = true; // rides the same fusion-assist channel: flux ×1.5 this tick
+        pushLog(s, `[t${t}] HARVEST — ${tech.line}`);
+      } else if (tech.id === "attune_cryo") {
+        s.buffs.cryo_until = t + 8;
+        pushLog(s, `[t${t}] ATTUNE — ${tech.line} (dissipation raised until t${s.buffs.cryo_until})`);
+      } else if (tech.id === "weave_material") {
+        s.buffs.weave_next = true;
+        pushLog(s, `[t${t}] WEAVE — ${tech.line}`);
+      } else if (tech.id === "mend_biotic") {
+        if (!s.damaged) { pushLog(s, `[t${t}] MEND — nothing is broken; the art settles as warmth`); }
+        else { s.buffs.mend_at = t + 4; pushLog(s, `[t${t}] MEND — ${tech.line} (whole at t${s.buffs.mend_at} if the heat is gone)`); }
+      } else if (tech.id === "shield_gravitic_material") {
+        s.buffs.shield_until = t + 12;
+        pushLog(s, `[t${t}] SHIELD — ${tech.line} (until t${s.buffs.shield_until})`);
+      } else if (tech.id === "sense_photonic_informational") {
+        let seen = 0;
+        for (let tau = t + 1; tau <= t + 24; tau++) {
+          if (flareActive(seedKey, tau)) { seen = tau; break; }
+        }
+        pushLog(s, seen
+          ? `[t${t}] SENSE — ${tech.line}: next flare at t${seen}`
+          : `[t${t}] SENSE — the light folds: no storm within 24 ticks`);
+      }
     } else if (o.kind === "refine_alloy") {
       if (spendable() < REFINE_EU) {
         pushLog(s, `[t${t}] refine_alloy rejected — needs ${REFINE_EU} eu (have ${s.store_eu})`);
@@ -480,7 +563,13 @@ export function resolve(
       s.ap -= cost;
       s.store_eu -= REFINE_EU;
       built += REFINE_EU;
-      const alloyOut = Math.floor((REFINE_ALLOY_BASE * sys.metallicity_milli) / 1000);
+      let alloyOut = Math.floor((REFINE_ALLOY_BASE * sys.metallicity_milli) / 1000);
+      if (s.buffs.weave_next) {
+        const bonus = Math.floor((alloyOut * (aspectsOf(sys).material * (s.mastery.material ?? 0))) / 2_000_000) + 1;
+        alloyOut += bonus;
+        s.buffs.weave_next = false;
+        pushLog(s, `[t${t}] the weave holds — +${bonus} alloy beyond the ordinary pattern`);
+      }
       s.stock.alloy += alloyOut;
       pushLog(s, `[t${t}] refined ${alloyOut} alloy from ${REFINE_EU} eu (Z ${sys.metallicity_milli}) — matter is embodied work`);
     } else if (o.kind === "burn_isotopes") {
@@ -618,6 +707,10 @@ export function resolve(
     for (let i = 0; i < before; i++) {
       if (roll(seedKey, t, i, 1000) < pfPerMille) failed++;
     }
+    if (failed > 0 && t <= s.buffs.shield_until) {
+      pushLog(s, `[t${t}] SHIELD holds — ${failed} panel${failed === 1 ? "" : "s"} would have failed; mass curves the blow aside`);
+      failed = 0;
+    }
     if (failed > 0) {
       s.structures.radiators.panels = Math.max(0, before - failed);
       pushLog(s, `[t${t}] radiator panel failure at run-temp ${tRad} — ${s.structures.radiators.panels} panels remain`);
@@ -685,9 +778,14 @@ export function resolve(
   }
 
 
-  const playerMods = s.burnActive
+  const cryoActive = t <= s.buffs.cryo_until;
+  const cryoBonus = cryoActive
+    ? Math.floor((aspectsOf(sys).cryo * (s.mastery.cryo ?? 0)) / 2000) + 250 // 250..750 milli extra D
+    : 0;
+  let playerMods = s.burnActive
     ? { ...mods, fluxMult_milli: Math.floor((mods.fluxMult_milli * BURN_FLUX_MULT_MILLI) / 1000) }
-    : mods;
+    : { ...mods };
+  playerMods = { ...playerMods, dissMult_milli: 1000 + cryoBonus };
   s.burnActive = false; // one tick of fire, then it is spent
   const out = thermoTick(
     {
@@ -717,6 +815,10 @@ export function resolve(
     }
   }
   // Repair is deliberate — a repair_systems order, never automatic.
+
+  // Arts' waste heat (M4a): the H component of every technique arrives here,
+  // where dStore(−X) + built(X−H) + dBank(+H) cancel — the invariant audits it.
+  if (techHeat > 0) s.heatBank_eu += techHeat;
 
   // The Hollow's levy: work becomes waste heat, tick after tick (M2i).
   // Store -> bank is an internal transfer: the invariant holds untouched,
