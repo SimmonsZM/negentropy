@@ -1,8 +1,9 @@
 // Genesis state, lazy catch-up, and the audit hash chain (Deep Dive §1).
 
 import { resolve } from "./resolve.js";
+import type { SystemDef } from "./starmap.js";
 import type { Rule } from "./reflex.js";
-import type { Order, SimState } from "./types.js";
+import type { Envelope, Order, SimState } from "./types.js";
 
 export function genesisState(): SimState {
   return {
@@ -39,6 +40,7 @@ export function genesisState(): SimState {
     book: [],
     bookSeq: 0,
     committedEu: 0,
+    reflexEvents: [],
     burnActive: false,
   };
 }
@@ -52,11 +54,14 @@ export function fastForward(
   seedKey: number,
   toTick: number,
   ordersByTick?: Map<number, Order[]>,
+  sys?: SystemDef,
+  inboxByTick?: Map<number, Envelope[]>,
 ): SimState {
   let cur = s;
   while (cur.tick < toTick) {
     const orders = ordersByTick?.get(cur.tick + 1) ?? [];
-    cur = resolve(cur, orders, rules, seedKey);
+    const due = inboxByTick?.get(cur.tick + 1) ?? [];
+    cur = resolve(cur, orders, rules, seedKey, sys, due);
   }
   return cur;
 }

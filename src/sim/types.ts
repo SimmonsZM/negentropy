@@ -2,6 +2,7 @@
 // so it hash-chains, clones, and persists byte-stably.
 
 import type { Realm, Stage } from "./stages.js";
+import type { ReflexEvent } from "./reflex.js";
 
 export interface Structures {
   collectors: { throttle_milli: number }; // 0..1000
@@ -139,6 +140,7 @@ export interface SimState {
   book: BookOrder[]; // The Exchange (M2g): this system's public order book
   bookSeq: number;
   committedEu: number; // eu locked under open bids — spendable = store − committed
+  reflexEvents: ReflexEvent[]; // events from phases 1/4/5, consumed by phase 2 (M2h)
   burnActive: boolean; // fusion-assist armed for THIS tick's production
   trial?: TrialState; // active tribulation, if any
   migrationCooldownUntil: number; // tick before which a new attempt is refused

@@ -15,7 +15,7 @@ import {
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
 } from "./core.js";
-import { evaluate, type Action, type Metrics, type Rule } from "./reflex.js";
+import { evaluate, type Action, type Metrics, type ReflexEvent, type Rule } from "./reflex.js";
 import { achieveBarMet, advanceStage, stageIndex, understandGateMet, TURBULENCE_RECOVERY } from "./stages.js";
 import { getSystem, laneLag, neighborsOf, type SystemDef } from "./starmap.js";
 import {
@@ -26,6 +26,11 @@ export class ConservationError extends Error {}
 
 function clone<T>(s: T): T {
   return JSON.parse(JSON.stringify(s)) as T;
+}
+
+function raiseEvent(s: SimState, e: ReflexEvent): void {
+  if (!s.reflexEvents.includes(e)) s.reflexEvents.push(e);
+  if (s.reflexEvents.length > 16) s.reflexEvents.splice(0, s.reflexEvents.length - 16);
 }
 
 // ---- Shared thermodynamic core: the ONE set of formulas both the player and
@@ -83,11 +88,16 @@ function thermoTick(inp: ThermoIn, flux: number, mods: TrialMods, alreadyDamaged
   };
 }
 
-function applyAction(s: SimState, a: Action, t: number): void {
-  if (a.type === "set_throttle") {
-    s.structures.collectors.throttle_milli = Math.max(0, Math.min(1000, a.value_milli));
-  } else {
-    pushLog(s, `[t${t}] ALERT ${a.message}`);
+/** Reflex actions become synthetic ORDERS: same handlers, same rejections,
+ * same logs, zero AP. Automation obeys the physics verbatim (M2h). */
+function actionToOrder(a: Action): Order | null {
+  switch (a.type) {
+    case "set_throttle": return { kind: "set_throttle", target: "collectors", value_milli: a.value_milli };
+    case "set_radiator_temp": return { kind: "set_radiator_temp", value_milli: a.value_milli };
+    case "repair_systems": return { kind: "repair_systems" };
+    case "burn_isotopes": return { kind: "burn_isotopes" };
+    case "place_order": return { kind: "place_order", side: a.side, good: a.good, qty: a.qty, price_milli: a.price_milli };
+    case "alert": return null;
   }
 }
 
@@ -139,6 +149,7 @@ export function resolve(
     f.score_milli = forecastScore(f.p_milli, outcome);
     s.calibration.n += 1;
     s.calibration.total_milli += f.score_milli;
+    raiseEvent(s, outcome ? "forecast_resolved.true" : "forecast_resolved.false");
     pushLog(s, `[t${t}] FORECAST RESOLVED — "flare within ${f.claim.window}" @ ${f.p_milli / 10}%: ` +
       `${outcome ? "TRUE" : "FALSE"} · ${f.score_milli >= 0 ? "+" : ""}${f.score_milli} pts · ` +
       `calibration ${s.calibration.total_milli >= 0 ? "+" : ""}${s.calibration.total_milli} over ${s.calibration.n}`);
@@ -171,12 +182,25 @@ export function resolve(
     "self.store": s.store_eu,
     "self.temp": s.heatBank_eu,
     "self.margin": D0 - s.heatBank_eu,
+    "self.panels": s.structures.radiators.panels,
+    "self.damaged": s.damaged ? 1 : 0,
+    "self.ap": s.ap,
+    "self.isotopes": s.stock.isotopes,
+    "self.alloy": s.stock.alloy,
+    "self.committed": s.committedEu,
   };
   const prevM = (s.metricsPrev as Metrics) ?? cur;
+  const eventsNow: ReflexEvent[] = s.reflexEvents;
+  s.reflexEvents = []; // consumed; phases 1/4/5 refill for the future
 
-  // ---- Phase 2: reflexes (execution costs 0 AP) ----
-  const { actions, fired } = evaluate(rules, prevM, cur, t, s.ruleMeta);
-  for (const a of actions) applyAction(s, a, t);
+  // ---- Phase 2: reflexes (execution costs 0 AP; resources still real) ----
+  const { actions, fired } = evaluate(rules, prevM, cur, t, s.ruleMeta, eventsNow);
+  const synthetic: Order[] = [];
+  for (const a of actions) {
+    if (a.type === "alert") { pushLog(s, `[t${t}] ALERT ${a.message}`); continue; }
+    const o = actionToOrder(a);
+    if (o) synthetic.push(o);
+  }
   for (const id of fired) pushLog(s, `[t${t}] reflex fired: ${id}`);
 
   // Pre-order baselines: dStore/dBank in the ledger are measured against these,
@@ -193,14 +217,19 @@ export function resolve(
   let gotHailNew = false;
   let justAscended = false; // the threshold tick belongs to neither climb
 
-  // ---- Phase 3: orders (AP-metered, initiative = submission order) ----
-  for (const o of orders) {
-    const cost = ORDER_COST[o.kind] ?? 1;
+  // ---- Phase 3: orders. Reflex-born orders run first, at 0 AP; manual
+  // orders follow, override, and are the ONLY ones that count as verbs. ----
+  const queue: Array<{ o: Order; free: boolean }> = [
+    ...synthetic.map((o) => ({ o, free: true })),
+    ...orders.map((o) => ({ o, free: false })),
+  ];
+  for (const { o, free } of queue) {
+    const cost = free ? 0 : ORDER_COST[o.kind] ?? 1;
     if (s.ap < cost) {
       pushLog(s, `[t${t}] order rejected (AP): ${o.kind}`);
       continue;
     }
-    if (o.kind !== "noop" && !s.verbsUsed.includes(o.kind)) s.verbsUsed.push(o.kind);
+    if (!free && o.kind !== "noop" && !s.verbsUsed.includes(o.kind)) s.verbsUsed.push(o.kind);
     if (o.kind === "set_throttle") {
       s.ap -= cost;
       s.structures.collectors.throttle_milli = Math.max(0, Math.min(1000, o.value_milli));
@@ -520,7 +549,7 @@ export function resolve(
       pushLog(s, `[t${t}] FILL #${fr!.orderId} from ${fr!.replyTo} BOUNCED — ${why}`);
       hails.push({
         from: sys.id, to: fr!.replyTo, kind: "cargo", emitted_t: t, deliver_at: t + back,
-        payload: JSON.stringify({ eu: fr!.escrow.eu ?? 0, isotopes: fr!.escrow.isotopes ?? 0, alloy: fr!.escrow.alloy ?? 0 }),
+        payload: JSON.stringify({ eu: fr!.escrow.eu ?? 0, isotopes: fr!.escrow.isotopes ?? 0, alloy: fr!.escrow.alloy ?? 0, bounce: true }),
       });
     };
     const idx = s.book.findIndex((b) => b.id === fr!.orderId);
@@ -541,6 +570,7 @@ export function resolve(
         payload: JSON.stringify({ [b.good]: fr.qty }),
       });
       pushLog(s, `[t${t}] BOOK #${b.id} FILLED by ${fr.replyTo}: ${fr.qty} ${b.good} @ ${b.price_milli} — +${fr.escrow.eu} eu, goods away`);
+      raiseEvent(s, "order_filled");
     } else {
       // They hit our bid with goods: committed eu releases and beams to them.
       const goodsIn = fr.escrow[b.good] ?? 0;
@@ -556,6 +586,7 @@ export function resolve(
         payload: JSON.stringify({ eu: pay }),
       });
       pushLog(s, `[t${t}] BOOK #${b.id} FILLED by ${fr.replyTo}: ${fr.qty} ${b.good} @ ${b.price_milli} — goods in, ${pay} eu away`);
+      raiseEvent(s, "order_filled");
     }
     if (b.qty === 0) {
       s.book.splice(idx, 1);
@@ -657,12 +688,24 @@ export function resolve(
       "self.store": m.store_eu,
       "self.temp": m.heatBank_eu,
       "self.margin": mD - m.heatBank_eu,
+      "self.panels": m.structures.radiators.panels,
+      "self.damaged": m.damaged ? 1 : 0,
+      "self.ap": 0,
+      "self.isotopes": 0,
+      "self.alloy": 0,
+      "self.committed": 0,
     };
     const mPrev = (Object.keys(m.metricsPrev).length ? m.metricsPrev : mCur) as Metrics;
     const mEval = evaluate(tr.rulesFrozen as Rule[], mPrev, mCur, t, m.ruleMeta);
     for (const a of mEval.actions) {
       if (a.type === "set_throttle") {
         m.structures.collectors.throttle_milli = Math.max(0, Math.min(1000, a.value_milli));
+      } else if (a.type === "set_radiator_temp") {
+        m.structures.radiators.t_rad_milli = Math.max(T_RAD_MIN, Math.min(T_RAD_MAX, a.value_milli));
+      } else if (a.type === "repair_systems" && m.damaged && m.heatBank_eu === 0 && m.store_eu >= REPAIR_EU) {
+        m.store_eu -= REPAIR_EU;
+        m.damaged = false;
+        pushLog(s, `[t${t}] the copy repairs itself — your reflexes, its hands`);
       }
     }
 
@@ -767,6 +810,9 @@ export function resolve(
       s.stock.isotopes += iso;
       s.stock.alloy += alloyIn;
       s.store_eu += euCargo; // post-ledger: next-books money
+      let wasBounce = false;
+      try { wasBounce = !!(JSON.parse(env.payload) as { bounce?: boolean }).bounce; } catch { /* noop */ }
+      raiseEvent(s, wasBounce ? "fill_bounced" : "cargo_received");
       pushLog(s, `[t${t}] CARGO from ${env.from} (${t - env.emitted_t} ticks in flight): +${iso} isotopes, +${alloyIn} alloy${euCargo ? `, +${euCargo} eu` : ""}`);
       continue;
     }
@@ -779,6 +825,7 @@ export function resolve(
       kind: env.kind as "beacon" | "hail", // cargo returned above
     });
     if (env.kind === "hail") { s.gotHail = true; gotHailNew = true; }
+    raiseEvent(s, env.kind === "hail" ? "message_received.hail" : "message_received.beacon");
     pushLog(s, env.kind === "hail"
       ? `[t${t}] HAIL from ${env.from} (${t - env.emitted_t} ticks in flight): "${env.payload}"`
       : `[t${t}] signal received from ${env.from} (emitted t${env.emitted_t}, ${t - env.emitted_t} ticks in flight)`);

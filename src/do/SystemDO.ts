@@ -75,6 +75,7 @@ export class SystemDO {
       if (p.sim.book === undefined) { p.sim.book = []; repaired = true; }
       if (p.sim.bookSeq === undefined) { p.sim.bookSeq = 0; repaired = true; }
       if (p.sim.committedEu === undefined) { p.sim.committedEu = 0; repaired = true; }
+      if (p.sim.reflexEvents === undefined) { p.sim.reflexEvents = []; repaired = true; }
       if (p.sim.verbsUsed === undefined) { p.sim.verbsUsed = []; repaired = true; }
       if (p.sim.sentHail === undefined) { p.sim.sentHail = false; repaired = true; }
       if (p.sim.gotHail === undefined) { p.sim.gotHail = false; repaired = true; }

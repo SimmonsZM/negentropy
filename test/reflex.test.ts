@@ -8,6 +8,12 @@ const m = (flux: number, store: number, temp: number): Metrics => ({
   "self.store": store,
   "self.temp": temp,
   "self.margin": 400 - temp,
+  "self.panels": 0,
+  "self.damaged": 0,
+  "self.ap": 0,
+  "self.isotopes": 0,
+  "self.alloy": 0,
+  "self.committed": 0,
 });
 
 describe("reflex language v0", () => {
