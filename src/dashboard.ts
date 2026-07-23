@@ -7,7 +7,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Negentropy — wei-9</title>
+<title>Negentropy</title>
 <style>
   :root {
     --bg: #0a0e14;
@@ -172,7 +172,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 <body>
   <section id="gate" class="hidden">
     <h2>Negentropy</h2>
-    <p>Enter your API token to observe <b>wei-9</b>. It is stored locally in this browser only.</p>
+    <p>Enter your API token. Whoever the token names, that is who you are — and whose star you steer. Stored locally in this browser only.</p>
     <input id="token-input" type="password" placeholder="Bearer token" autocomplete="off" />
     <button id="token-save">Connect</button>
   </section>
