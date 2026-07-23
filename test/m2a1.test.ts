@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { fuse, mindOf, placeOf } from "../src/sim/mindplace.js";
+// M5b: storage holds {place, mind}; these helpers speak the on-disk grammar.
+function simFromStored(stored: any) { return stored.sim ?? fuse(stored.place, stored.mind); }
+function storeSim(stored: any, sim: any) { delete stored.sim; stored.place = placeOf(sim); stored.mind = mindOf(sim); }
 import { SystemDO, type Env } from "../src/do/SystemDO.js";
 import type { Envelope } from "../src/sim/types.js";
 
@@ -61,7 +65,7 @@ describe("M2a.1: first-contact catch-up is bounded and retry-safe", () => {
 
     // Progress persisted (mid-loop checkpoints ran): the blob is at 815.
     const p = map.get("p") as any;
-    expect(p.sim.tick).toBe(815);
+    expect(simFromStored(p).tick).toBe(815);
   });
 
   it("/deliver is idempotent on (from, emitted_t)", async () => {

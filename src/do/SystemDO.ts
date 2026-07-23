@@ -5,6 +5,7 @@
 
 import { REFLEX_EDIT_COST, SIM_VERSION, seedFrom } from "../sim/core.js";
 import { HORIZON_BY_REALM, SLOTS_BY_REALM, slotsFor } from "../sim/stages.js";
+import { fuse, mindOf, placeOf, type Mind, type Place } from "../sim/mindplace.js";
 import { defaultInstincts, ruleCost, type NeighborBooks, type Rule } from "../sim/reflex.js";
 import { chargeReflexEdit, resolve } from "../sim/resolve.js";
 import { getSystem, neighborsOf } from "../sim/starmap.js";
@@ -39,6 +40,12 @@ interface PublicView {
   book: Array<{ id: number; side: string; good: string; qty: number; price_milli: number }>; // posted prices are broadcast
 }
 
+/** On-disk shape (M5b): new blobs store the mind and the place as separate
+ * halves; legacy blobs carry the fused sim. Load fuses; save always splits.
+ * If both shapes are somehow present, sim wins (it can only be the newer
+ * write) and the next save re-splits it. */
+type StoredPersisted = Omit<Persisted, "sim"> & { sim?: SimState; place?: Place; mind?: Mind };
+
 interface Persisted {
   sim: SimState;
   rules: Rule[];
@@ -54,11 +61,27 @@ interface Persisted {
 export class SystemDO {
   constructor(private ctx: DurableObjectState, private env: Env) {}
 
+  /** The only door storage writes may use (M5b): the fused shape is
+   * NEVER written again. */
+  private async savePersisted(p: Persisted): Promise<void> {
+    const { sim, ...rest } = p;
+    const stored: StoredPersisted = { ...rest, place: placeOf(sim), mind: mindOf(sim) };
+    await this.ctx.storage.put("p", stored);
+  }
+
   private async load(sysParam: string | null): Promise<Persisted> {
-    const p = await this.ctx.storage.get<Persisted>("p");
+    const raw = await this.ctx.storage.get<StoredPersisted>("p");
+    let splitLoaded = false;
+    if (raw && !raw.sim && raw.place && raw.mind) {
+      raw.sim = fuse(raw.place, raw.mind);
+      splitLoaded = true;
+    }
+    if (raw) { delete raw.place; delete raw.mind; }
+    const p = raw as Persisted | undefined;
     if (p) {
       // Migrate older blobs: default fields that predate their feature.
-      let repaired = false;
+      // A legacy FUSED blob counts as needing repair: its next save splits it.
+      let repaired = !splitLoaded;
       if (p.sim.stage === undefined) { p.sim.stage = "survive"; repaired = true; }
       if (p.sim.positiveStreak === undefined) { p.sim.positiveStreak = 0; repaired = true; }
       if (p.sim.receivedSignals === undefined) { p.sim.receivedSignals = []; repaired = true; }
@@ -95,7 +118,7 @@ export class SystemDO {
       if (p.sim.harmonizeCooldownUntil === undefined) { p.sim.harmonizeCooldownUntil = 0; repaired = true; }
       if (p.systemId === undefined) { p.systemId = sysParam ?? "wei-9-home"; repaired = true; }
       if (p.inbox === undefined) { p.inbox = []; repaired = true; }
-      if (repaired) await this.ctx.storage.put("p", p);
+      if (repaired) await this.savePersisted(p);
       return p;
     }
     const fresh: Persisted = {
@@ -105,7 +128,7 @@ export class SystemDO {
       systemId: sysParam ?? "wei-9-home",
       inbox: [],
     };
-    await this.ctx.storage.put("p", fresh);
+    await this.savePersisted(fresh);
     return fresh;
   }
 
@@ -226,9 +249,9 @@ export class SystemDO {
 
       // Durability: persist progress periodically so a mid-catch-up crash
       // resumes instead of restarting (deliveries are idempotent, see /deliver).
-      if (t % 48 === 0) await this.ctx.storage.put("p", p);
+      if (t % 48 === 0) await this.savePersisted(p);
     }
-    await this.ctx.storage.put("p", p);
+    await this.savePersisted(p);
     await this.notify(p, sys.name);
   }
 
@@ -240,7 +263,7 @@ export class SystemDO {
     const lines = notableSince(p.sim.log, after);
     if (p.lastNotifiedTick === undefined || p.sim.tick <= after) {
       p.lastNotifiedTick = p.sim.tick;
-      await this.ctx.storage.put("p", p);
+      await this.savePersisted(p);
       return;
     }
     p.lastNotifiedTick = p.sim.tick;
@@ -257,7 +280,7 @@ export class SystemDO {
         p.webhookFailures = (p.webhookFailures ?? 0) + 1;
       }
     }
-    await this.ctx.storage.put("p", p);
+    await this.savePersisted(p);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -297,7 +320,7 @@ export class SystemDO {
       }
       p.inbox.push(env);
       if (p.inbox.length > 64) p.inbox.splice(0, p.inbox.length - 64); // bounded, oldest first out
-      await this.ctx.storage.put("p", p);
+      await this.savePersisted(p);
       return json({ delivered_to: p.systemId, deliver_at: env.deliver_at });
     }
 
@@ -311,12 +334,12 @@ export class SystemDO {
         p.webhookUrl = body.url;
         p.webhookFailures = 0;
         p.lastNotifiedTick = p.sim.tick; // forward-only: never replay history into a fresh hook
-        await this.ctx.storage.put("p", p);
+        await this.savePersisted(p);
         return json({ ok: true, armed_from_tick: p.sim.tick });
       }
       if (req.method === "DELETE") {
         delete p.webhookUrl;
-        await this.ctx.storage.put("p", p);
+        await this.savePersisted(p);
         return json({ ok: true });
       }
       if (req.method === "GET") {
@@ -402,7 +425,7 @@ export class SystemDO {
       });
       if (refactored) p.sim.lastReflexRefactorTick = p.sim.tick;
       p.rules = incoming;
-      await this.ctx.storage.put("p", p);
+      await this.savePersisted(p);
       return json({ ok: true, ap_remaining: p.sim.ap, slots, refactor_noted: refactored || undefined, cost: incoming.map((r) => ({ id: r.id, complexity: ruleCost(r) })) });
     }
 

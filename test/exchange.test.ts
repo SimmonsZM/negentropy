@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { fuse, mindOf, placeOf } from "../src/sim/mindplace.js";
+// M5b: storage holds {place, mind}; these helpers speak the on-disk grammar.
+function simFromStored(stored: any) { return stored.sim ?? fuse(stored.place, stored.mind); }
+function storeSim(stored: any, sim: any) { delete stored.sim; stored.place = placeOf(sim); stored.mind = mindOf(sim); }
 import { seedFrom } from "../src/sim/core.js";
 import { defaultInstincts } from "../src/sim/reflex.js";
 import { resolve } from "../src/sim/resolve.js";
@@ -66,7 +70,9 @@ describe("M2g: a trade crosses the vacuum — settle, and bounce", () => {
     // Seed A with alloy and a resting ask at t1.
     await doA.obj.fetch(new Request("https://do/state?sys=wei-9-home&toTick=0"));
     const pA = A.map.get("p") as any;
-    pA.sim.stock.alloy = 20;
+    const simA = simFromStored(pA);
+    simA.stock.alloy = 20;
+    storeSim(pA, simA);
     A.map.set("p", pA);
     await doA.obj.fetch(new Request("https://do/orders?sys=wei-9-home&toTick=0", {
       method: "POST", headers: { "content-type": "application/json" },
@@ -112,7 +118,9 @@ describe("M2g: a trade crosses the vacuum — settle, and bounce", () => {
 
     await doA.obj.fetch(new Request("https://do/state?sys=wei-9-home&toTick=0"));
     const pA = A.map.get("p") as any;
-    pA.sim.stock.alloy = 20;
+    const simA = simFromStored(pA);
+    simA.stock.alloy = 20;
+    storeSim(pA, simA);
     A.map.set("p", pA);
     await doA.obj.fetch(new Request("https://do/orders?sys=wei-9-home&toTick=0", {
       method: "POST", headers: { "content-type": "application/json" },
