@@ -360,7 +360,7 @@ export const DASHBOARD_HTML = `<!doctype html>
           <button class="btn ghost" id="rx-open">Open editor</button>
           <span class="pill">saving costs 2 AP · instincts stay locked until Mirror Sight</span>
         </div>
-        <div class="sub">triggers: tick · threshold_crossed(metric) · event(message_received.hail/.beacon, cargo_received, order_filled, fill_bounced, forecast_resolved.true/.false) — metrics: system.flux, self.store/temp/margin/panels/damaged/ap/isotopes/alloy/committed — actions: set_throttle, set_radiator_temp, repair_systems, burn_isotopes, place_order, alert</div>
+        <div class="sub">triggers: tick · threshold_crossed(metric) · event(message_received.hail/.beacon, cargo_received, order_filled, fill_bounced, forecast_resolved.true/.false) · market(system, side, good, &lt;/&gt; price) — metrics: system.flux, self.store/temp/margin/panels/damaged/ap/isotopes/alloy/committed — actions: set_throttle, set_radiator_temp, repair_systems, burn_isotopes, place_order, fill_order(order_id or "best"), alert</div>
         <div class="ctl" style="display:none;">
         </div>
         <div id="rx-box" class="hidden">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { seedFrom } from "../src/sim/core.js";
-import { defaultInstincts, type Rule } from "../src/sim/reflex.js";
+import { defaultInstincts, ruleCost, type Rule } from "../src/sim/reflex.js";
 import { resolve } from "../src/sim/resolve.js";
 import { fastForward, genesisState, stateHash } from "../src/sim/support.js";
 import { getSystem } from "../src/sim/starmap.js";
@@ -131,5 +131,46 @@ describe("M2h: catch-up equality through an event chain", () => {
     const cold = fastForward(genesisState(), rules, SEED, 8, undefined, HOME, mail);
     expect(await stateHash(cold)).toBe(await stateHash(live));
     expect(cold.log.join("\n")).toContain("the old drum");
+  });
+});
+
+describe("M3d: the Listening Market — reflexes hear prices", () => {
+  it("a market trigger fires on the recorded lagged book, and 'best' picks the right order", () => {
+    const rules: Rule[] = [...BASE, {
+      id: "r-vulture", priority: 70,
+      trigger: { type: "market", system: "iron-halo", side: "ask", good: "alloy", op: "<", price_milli: 25000 },
+      actions: [{ type: "fill_order", system: "iron-halo", order_id: "best", qty: 3, side: "ask", good: "alloy", price_milli: 0 }],
+    }];
+    let s = genesisState();
+    const heard = { "iron-halo": [
+      { id: 4, side: "ask", good: "alloy", qty: 10, price_milli: 24000 },
+      { id: 5, side: "ask", good: "alloy", qty: 10, price_milli: 29000 },
+    ] };
+    s = resolve(s, [], rules, SEED, HOME, [], heard);
+    const log = s.log.join("\n");
+    expect(log).toContain("reflex fired: r-vulture");
+    expect(log).toContain("FILL away to iron-halo — lifting #4 for 3 alloy @ 24000"); // best = the cheap one
+    expect(s.ledger.transmitted_eu).toBe(72); // 3 × 24 eu, escrowed and audited at 0 AP
+  });
+
+  it("silence is deterministic: no books heard, no fire — catch-up replays exactly", async () => {
+    const rules: Rule[] = [...BASE, {
+      id: "r-vulture", priority: 70,
+      trigger: { type: "market", system: "iron-halo", side: "ask", good: "alloy", op: "<", price_milli: 25000 },
+      actions: [{ type: "alert", message: "heard something" }],
+    }];
+    let live = genesisState();
+    for (let t = 1; t <= 6; t++) live = resolve(live, [], rules, SEED, HOME, [], {});
+    const cold = fastForward(genesisState(), rules, SEED, 6, undefined, HOME);
+    expect(await stateHash(cold)).toBe(await stateHash(live));
+    expect(live.log.join("\n")).not.toContain("heard something");
+  });
+
+  it("hearing is priced: a market-trigger rule costs its sensing", () => {
+    const plain: Rule = { id: "a", priority: 1, trigger: { type: "tick" }, actions: [{ type: "alert", message: "x" }] };
+    const eared: Rule = { id: "b", priority: 1,
+      trigger: { type: "market", system: "iron-halo", side: "ask", good: "alloy", op: "<", price_milli: 1 },
+      actions: [{ type: "alert", message: "x" }] };
+    expect(ruleCost(eared)).toBe(ruleCost(plain) + 2);
   });
 });

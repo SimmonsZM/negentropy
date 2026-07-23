@@ -5,9 +5,9 @@
 
 import { REFLEX_EDIT_COST, SIM_VERSION, seedFrom } from "../sim/core.js";
 import { HORIZON_BY_REALM, SLOTS_BY_REALM } from "../sim/stages.js";
-import { defaultInstincts, ruleCost, type Rule } from "../sim/reflex.js";
+import { defaultInstincts, ruleCost, type NeighborBooks, type Rule } from "../sim/reflex.js";
 import { chargeReflexEdit, resolve } from "../sim/resolve.js";
-import { getSystem } from "../sim/starmap.js";
+import { getSystem, neighborsOf } from "../sim/starmap.js";
 import { WEBHOOK_MAX_FAILURES, buildDigest, notableSince, validWebhookUrl } from "./notify.js";
 import { chainLink, genesisState, stableStringify, stateHash } from "../sim/support.js";
 import type { Envelope, Order, SimState } from "../sim/types.js";
@@ -116,9 +116,31 @@ export class SystemDO {
         .sort((a, b) => a.deliver_at - b.deliver_at || (a.from < b.from ? -1 : 1) || a.emitted_t - b.emitted_t);
       p.inbox = p.inbox.filter((e) => e.deliver_at > t);
 
-      p.sim = resolve(p.sim, orders, p.rules, seedKey, sys, due);
+      // The Listening Market (M3d): ears open ONLY at the live edge. Each
+      // heard book is a lagged snapshot; whatever is heard is RECORDED into
+      // this tick's chain inputs, so replay hears exactly what live heard —
+      // and catch-up ticks hear nothing, which is itself deterministic.
+      let books: NeighborBooks = {};
+      const hasEars = p.rules.some((r) => r.trigger.type === "market");
+      if (hasEars && t === toTick) {
+        for (const n of neighborsOf(p.systemId)) {
+          try {
+            const asOf = t - n.lag_ticks;
+            if (asOf < 0) continue;
+            const stub = this.env.SYSTEM_DO.get(this.env.SYSTEM_DO.idFromName(n.sys.id));
+            await stub.fetch(`https://do/state?sys=${n.sys.id}&toTick=${t}`);
+            const snapR = await stub.fetch(`https://do/snapshot?sys=${n.sys.id}&at=${asOf}`);
+            if (snapR.status === 200) {
+              const snap = (await snapR.json()) as { book?: NeighborBooks[string] };
+              if (snap.book?.length) books[n.sys.id] = snap.book;
+            }
+          } catch { /* a deaf tick is a valid tick */ }
+        }
+      }
 
-      const inputs = stableStringify({ v: SIM_VERSION, t, orders, rules: p.rules, inboxDue: due });
+      p.sim = resolve(p.sim, orders, p.rules, seedKey, sys, due, books);
+
+      const inputs = stableStringify({ v: SIM_VERSION, t, orders, rules: p.rules, inboxDue: due, books });
       p.chain = await chainLink(p.chain, inputs, await stateHash(p.sim));
       await this.ctx.storage.delete(`orders:${t}`);
 

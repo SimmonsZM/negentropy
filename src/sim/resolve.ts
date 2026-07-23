@@ -17,7 +17,7 @@ import {
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, mix, phaseAngle,
   roll,
 } from "./core.js";
-import { evaluate, type Action, type Metrics, type ReflexEvent, type Rule } from "./reflex.js";
+import { bestPrice, evaluate, type Action, type Metrics, type NeighborBooks, type ReflexEvent, type Rule } from "./reflex.js";
 import { achieveBarMet, advanceStage, stageIndex, understandGateMet, TURBULENCE_RECOVERY } from "./stages.js";
 import { getSystem, laneLag, neighborsOf, type SystemDef } from "./starmap.js";
 import {
@@ -99,6 +99,7 @@ function actionToOrder(a: Action): Order | null {
     case "repair_systems": return { kind: "repair_systems" };
     case "burn_isotopes": return { kind: "burn_isotopes" };
     case "place_order": return { kind: "place_order", side: a.side, good: a.good, qty: a.qty, price_milli: a.price_milli };
+    case "fill_order": return null; // resolved at the call site: "best" needs the books
     case "alert": return null;
   }
 }
@@ -130,6 +131,7 @@ export function resolve(
   seedKey: number,
   sys: SystemDef = getSystem("wei-9-home")!,
   inboxDue: Envelope[] = [],
+  neighborBooks: NeighborBooks = {},
 ): SimState {
   const s = clone(prev);
   const t = s.tick + 1;
@@ -220,10 +222,28 @@ export function resolve(
   s.reflexEvents = []; // consumed; phases 1/4/5 refill for the future
 
   // ---- Phase 2: reflexes (execution costs 0 AP; resources still real) ----
-  const { actions, fired } = evaluate(rules, prevM, cur, t, s.ruleMeta, eventsNow);
+  const books: NeighborBooks = neighborBooks ?? {};
+  const { actions, fired } = evaluate(rules, prevM, cur, t, s.ruleMeta, eventsNow, books);
   const synthetic: Order[] = [];
   for (const a of actions) {
     if (a.type === "alert") { pushLog(s, `[t${t}] ALERT ${a.message}`); continue; }
+    if (a.type === "fill_order") {
+      // "best" resolves against the RECORDED lagged book — the same ears
+      // that fired the trigger. A stale pick still bounces honestly.
+      let orderId = a.order_id;
+      if (orderId === "best") {
+        const bp = bestPrice(books[a.system], a.side, a.good);
+        const cand = (books[a.system] ?? []).find(
+          (o) => o.side === a.side && o.good === a.good && o.price_milli === bp,
+        );
+        if (!cand) { pushLog(s, `[t${t}] reflex fill skipped — nothing heard on ${a.system}'s ${a.side} ${a.good}`); continue; }
+        orderId = cand.id;
+        synthetic.push({ kind: "fill_order", system: a.system, order_id: orderId, qty: Math.min(a.qty, cand.qty), side: a.side, good: a.good, price_milli: cand.price_milli });
+        continue;
+      }
+      synthetic.push({ kind: "fill_order", system: a.system, order_id: orderId, qty: a.qty, side: a.side, good: a.good, price_milli: a.price_milli });
+      continue;
+    }
     const o = actionToOrder(a);
     if (o) synthetic.push(o);
   }

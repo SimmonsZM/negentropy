@@ -23,10 +23,15 @@ export type ReflexEvent =
   | "forecast_resolved.true"
   | "forecast_resolved.false";
 
+/** A neighbor's book as recorded at the live edge (lagged, fog-honest). */
+export type PublicBook = Array<{ id: number; side: string; good: string; qty: number; price_milli: number }>;
+export type NeighborBooks = Record<string, PublicBook>;
+
 export type Trigger =
   | { type: "tick" }
   | { type: "threshold_crossed"; metric: MetricKey; op: ">" | "<"; value: number }
-  | { type: "event"; event: ReflexEvent };
+  | { type: "event"; event: ReflexEvent }
+  | { type: "market"; system: string; side: "bid" | "ask"; good: "isotopes" | "alloy"; op: ">" | "<"; price_milli: number };
 
 export type Cond =
   | { lhs: MetricKey; op: ">" | "<" | ">=" | "<=" | "=="; rhs: number }
@@ -41,6 +46,7 @@ export type Action =
   | { type: "repair_systems" }
   | { type: "burn_isotopes" }
   | { type: "place_order"; side: "bid" | "ask"; good: "isotopes" | "alloy"; qty: number; price_milli: number }
+  | { type: "fill_order"; system: string; order_id: number | "best"; qty: number; side: "bid" | "ask"; good: "isotopes" | "alloy"; price_milli: number }
   | { type: "alert"; message: string };
 
 export interface Rule {
@@ -69,9 +75,21 @@ function evalCond(c: Cond, m: Metrics): boolean {
   }
 }
 
-function triggered(t: Trigger, prev: Metrics, cur: Metrics, events: ReflexEvent[]): boolean {
+/** Best resting price on a side: asks quote low (min), bids quote high (max). */
+export function bestPrice(book: PublicBook | undefined, side: string, good: string): number | undefined {
+  const prices = (book ?? []).filter((o) => o.side === side && o.good === good).map((o) => o.price_milli);
+  if (!prices.length) return undefined;
+  return side === "ask" ? Math.min(...prices) : Math.max(...prices);
+}
+
+function triggered(t: Trigger, prev: Metrics, cur: Metrics, events: ReflexEvent[], books: NeighborBooks): boolean {
   if (t.type === "tick") return true;
   if (t.type === "event") return events.includes(t.event);
+  if (t.type === "market") {
+    const p = bestPrice(books[t.system], t.side, t.good);
+    if (p === undefined) return false; // silence — nothing heard is nothing fired
+    return t.op === "<" ? p < t.price_milli : p > t.price_milli;
+  }
   const p = prev[t.metric] ?? 0;
   const c = cur[t.metric] ?? 0;
   return t.op === ">" ? p <= t.value && c > t.value : p >= t.value && c < t.value;
@@ -86,6 +104,7 @@ export function evaluate(
   tick: number,
   ruleMeta: Record<string, number>,
   events: ReflexEvent[] = [],
+  books: NeighborBooks = {},
 ): { actions: Action[]; fired: string[] } {
   const ordered = [...rules].sort((a, b) => b.priority - a.priority || (a.id < b.id ? -1 : 1));
   const actions: Action[] = [];
@@ -93,7 +112,7 @@ export function evaluate(
   for (const r of ordered) {
     const last = ruleMeta[r.id] ?? -1_000_000;
     if (r.cooldown_ticks && tick - last < r.cooldown_ticks) continue;
-    if (!triggered(r.trigger, prev, cur, events)) continue;
+    if (!triggered(r.trigger, prev, cur, events, books)) continue;
     if (r.conditions && !r.conditions.every((c) => evalCond(c, cur))) continue;
     actions.push(...r.actions);
     fired.push(r.id);
@@ -111,7 +130,10 @@ const ACTION_WEIGHT: Record<Action["type"], number> = {
   burn_isotopes: 2,
   repair_systems: 2,
   place_order: 3,
+  fill_order: 3,
 };
+
+const TRIGGER_WEIGHT = (t: Trigger): number => (t.type === "market" ? 2 : 0); // sensing beyond the self costs
 
 export function ruleCost(r: Rule): number {
   const condCost = (c: Cond): number =>
@@ -120,7 +142,7 @@ export function ruleCost(r: Rule): number {
     : "any" in c ? 1 + c.any.reduce((s, x) => s + condCost(x), 0)
     : 1;
   const actCost = r.actions.reduce((s, a) => s + 1 + ACTION_WEIGHT[a.type], 0);
-  return 1 + (r.conditions ?? []).reduce((s, c) => s + condCost(c), 0) + actCost;
+  return 1 + TRIGGER_WEIGHT(r.trigger) + (r.conditions ?? []).reduce((s, c) => s + condCost(c), 0) + actCost;
 }
 
 export function defaultInstincts(): Rule[] {
