@@ -5,6 +5,7 @@
 // SHA-256 hashes; the plaintext is returned exactly once, at mint.
 
 import { allSystems } from "../sim/starmap.js";
+import { FEATS } from "../season.js";
 import { sha256Hex } from "../sim/support.js";
 
 export interface Identity {
@@ -121,6 +122,66 @@ export class RegistryDO {
         return json({ left: true });
       }
       return json({ error: "action: found | join | leave | mine" }, 400);
+    }
+
+    // ---- Feats (M3a): the world's serializer. First come, largest share. ----
+    if (req.method === "POST" && url.pathname === "/feat") {
+      const body = (await (async () => { try { return await req.json(); } catch { return {}; } })()) as
+        { systemId?: string; featId?: string; t?: number };
+      const featId = body.featId ?? "";
+      if (!(featId in FEATS)) return json({ error: "unknown feat" }, 400);
+      const sysId = body.systemId ?? "";
+      const claims = (await this.ctx.storage.get<Record<string, string>>("claims")) ?? {};
+      const identity = sysId === "wei-9-home" ? "wei-9" : claims[sysId];
+      if (!identity) return json({ error: "unclaimed system earns no feats" }, 404);
+      const feats = (await this.ctx.storage.get<Record<string, Array<{ identity: string; t: number }>>>("feats")) ?? {};
+      const list = feats[featId] ?? [];
+      if (list.some((c) => c.identity === identity)) return json({ duplicate: true });
+      list.push({ identity, t: body.t ?? 0 });
+      feats[featId] = list;
+      await this.ctx.storage.put("feats", feats);
+      return json({ recorded: featId, rank: list.length });
+    }
+    if (req.method === "GET" && url.pathname === "/feats") {
+      const feats = (await this.ctx.storage.get<Record<string, Array<{ identity: string; t: number }>>>("feats")) ?? {};
+      return json({ feats });
+    }
+
+    // ---- Wallfacer (M3a): sealed strategy, commit-reveal (Deep Dive §13).
+    // The registry stores HASHES; the plaintext never passes this way until
+    // its author reveals it against their own commitment. ----
+    if (url.pathname === "/wallfacer") {
+      const body = (await (async () => { try { return await req.json(); } catch { return {}; } })()) as
+        { action?: string; identity?: string; commit?: string; reveal?: string; t?: number };
+      const who = (body.identity ?? "").trim();
+      const wf = (await this.ctx.storage.get<Record<string, { commit: string; committed_t: number; reveal?: string; revealed_t?: number }>>("wallfacer")) ?? {};
+
+      if (req.method === "GET" || body.action === "all") {
+        return json({ wallfacers: wf });
+      }
+      if (req.method !== "POST") return json({ error: "POST required" }, 405);
+      if (body.action === "commit") {
+        if (wf[who]) return json({ error: "your wall is already faced — one sealed strategy per season" }, 409);
+        const commit = (body.commit ?? "").toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(commit)) return json({ error: "commit must be a sha-256 hex digest" }, 400);
+        wf[who] = { commit, committed_t: body.t ?? 0 };
+        await this.ctx.storage.put("wallfacer", wf);
+        return json({ committed: true, at_tick: wf[who].committed_t });
+      }
+      if (body.action === "reveal") {
+        const mine = wf[who];
+        if (!mine) return json({ error: "nothing was sealed" }, 404);
+        if (mine.reveal) return json({ error: "already revealed — the record is immutable" }, 409);
+        const text = body.reveal ?? "";
+        const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+        const hex = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+        if (hex !== mine.commit) return json({ error: "the reveal does not match the seal — that is not what you committed" }, 400);
+        mine.reveal = text;
+        mine.revealed_t = body.t ?? 0;
+        await this.ctx.storage.put("wallfacer", wf);
+        return json({ revealed: true });
+      }
+      return json({ error: "action: commit | reveal | all" }, 400);
     }
 
     if (req.method === "GET" && url.pathname === "/sects") {

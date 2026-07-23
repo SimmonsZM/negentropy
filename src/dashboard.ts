@@ -320,6 +320,19 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div id="fc-cal" class="sub">—</div>
       </div>
       <div class="card wide" style="margin-top:16px;">
+        <h2>Season 0 — the standings</h2>
+        <div id="season-box"><div>—</div></div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
+        <h2>The Wallfacer — sealed until you speak</h2>
+        <div class="sub">Your strategy is hashed IN THIS BROWSER; only the seal leaves. Keep the text — the server cannot return what it never saw.</div>
+        <div id="wf-box" style="margin-top:6px; font-size:12px;"><div>—</div></div>
+        <div class="ctl">
+          <button class="btn ghost" id="wf-commit">Seal a strategy</button>
+          <button class="btn ghost" id="wf-reveal">Reveal</button>
+        </div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
         <h2>Sect — the banner and the vault</h2>
         <div id="sect-box"><div>—</div></div>
         <div class="ctl">
@@ -579,6 +592,26 @@ export const DASHBOARD_HTML = `<!doctype html>
       stageOrder(
         { kind: "register_forecast", claim: { type: "flare_within", window: Number(fw.value) }, p_milli: Number(fp.value) },
         "forecast: flare within " + fw.value + " @ " + (Number(fp.value) / 10) + "%", 1);
+    });
+    async function sha256hex(text) {
+      var buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+      return Array.prototype.map.call(new Uint8Array(buf), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+    }
+    document.getElementById("wf-commit").addEventListener("click", async function () {
+      var text = window.prompt("Your sealed strategy. SAVE THIS TEXT YOURSELF — only its hash leaves this page:");
+      if (!text) return;
+      try {
+        var seal = await sha256hex(text);
+        await apiSend("/v1/wallfacer", "POST", { action: "commit", commit: seal });
+        statusEl.textContent = "sealed · " + seal.slice(0, 12) + "… — keep your text safe";
+        refresh();
+      } catch (e) { statusEl.textContent = "seal failed: " + e.message; }
+    });
+    document.getElementById("wf-reveal").addEventListener("click", async function () {
+      var text = window.prompt("Paste the EXACT text you sealed:");
+      if (!text) return;
+      try { await apiSend("/v1/wallfacer", "POST", { action: "reveal", reveal: text }); refresh(); }
+      catch (e) { statusEl.textContent = "reveal failed: " + e.message; }
     });
     document.getElementById("sect-found").addEventListener("click", async function () {
       var nm = window.prompt("Banner name (3-32 chars):");
@@ -899,6 +932,34 @@ export const DASHBOARD_HTML = `<!doctype html>
       renderSignals(sys.signals);
       renderTrial(sys, self);
       renderExchange();
+      api("/v1/season").then(function (sn) {
+        var box = document.getElementById("season-box");
+        box.innerHTML = "";
+        var hd = document.createElement("div");
+        hd.className = "sub";
+        hd.textContent = sn.weights + " · ends t" + sn.ends_tick + " (" + sn.ticks_remaining + " ticks remain)";
+        box.appendChild(hd);
+        sn.standings.forEach(function (r) {
+          var e = document.createElement("div");
+          e.textContent = "#" + r.rank + "  " + r.identity + " — " + r.score_milli + " pts  (wealth " + r.wealth_eu +
+            " eu · feats " + Math.round(r.feats_milli / 1000) + " · cal " + r.calibration_milli + ")";
+          if (r.identity === self.identity) e.style.color = "var(--accent)";
+          box.appendChild(e);
+        });
+      }).catch(function () { /* keep last */ });
+      api("/v1/wallfacer").then(function (w) {
+        var box = document.getElementById("wf-box");
+        box.innerHTML = "";
+        var keys = Object.keys(w.wallfacers || {});
+        if (!keys.length) { box.innerHTML = "<div>— no walls faced yet —</div>"; return; }
+        keys.forEach(function (k) {
+          var v = w.wallfacers[k];
+          var e = document.createElement("div");
+          e.textContent = k + " sealed at t" + v.committed_t + " (" + v.commit.slice(0, 12) + "…)" +
+            (v.reveal ? '  REVEALED t' + v.revealed_t + ': "' + v.reveal + '"' : "  — still sealed —");
+          box.appendChild(e);
+        });
+      }).catch(function () { /* keep last */ });
       api("/v1/sect").then(function (r) {
         var box = document.getElementById("sect-box");
         var leaveB = document.getElementById("sect-leave");

@@ -106,6 +106,8 @@ export class SystemDO {
 
     while (p.sim.tick < toTick) {
       const t = p.sim.tick + 1;
+      const stageBefore = p.sim.stage;
+      const realmBefore = p.sim.realm;
       const orders = (await this.ctx.storage.get<Order[]>(`orders:${t}`)) ?? [];
 
       // This tick's mail: deterministic order (deliver_at, from, emitted_t).
@@ -119,6 +121,36 @@ export class SystemDO {
       const inputs = stableStringify({ v: SIM_VERSION, t, orders, rules: p.rules, inboxDue: due });
       p.chain = await chainLink(p.chain, inputs, await stateHash(p.sim));
       await this.ctx.storage.delete(`orders:${t}`);
+
+      // Feat reporting (M3a): stage and realm crossings go to the registry,
+      // the world's serializer. Best-effort; the registry dedupes.
+      if (p.sim.stage !== stageBefore || p.sim.realm !== realmBefore) {
+        const reg = this.env.REGISTRY_DO.get(this.env.REGISTRY_DO.idFromName("registry"));
+        const report = async (featId: string) => {
+          try {
+            await reg.fetch("https://do/feat", {
+              method: "POST", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ systemId: p.systemId, featId, t }),
+            });
+          } catch { /* feats are best-effort history, not physics */ }
+        };
+        if (p.sim.realm !== realmBefore) await report("migration_pass");
+        if (p.sim.stage !== stageBefore) {
+          // On ascension the stage RESETS to survive; that reset is not a feat.
+          if (p.sim.realm === realmBefore) await report(`${stageBefore}_${p.sim.realm}`);
+        }
+      }
+      // The capstone has no exit transition: it fires on the sixteenth
+      // silent tick at the summit. The registry dedupes repeats.
+      if (p.sim.stage === "complete" && p.sim.handsOffStreak === 16) {
+        const reg = this.env.REGISTRY_DO.get(this.env.REGISTRY_DO.idFromName("registry"));
+        try {
+          await reg.fetch("https://do/feat", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ systemId: p.systemId, featId: `complete_${p.sim.realm}`, t }),
+          });
+        } catch { /* best-effort */ }
+      }
 
       // Mirror Sight's prize: once Foundation is reached, the instincts are
       // yours to author. Idempotent; the rules used each tick are chain inputs.

@@ -10,6 +10,7 @@ import type { Env } from "./do/SystemDO.js";
 export { SystemDO } from "./do/SystemDO.js";
 export { RegistryDO } from "./do/RegistryDO.js";
 import { sha256Hex } from "./sim/support.js";
+import { FEATS, REF_PRICE, SEASON_END_TICK, SEASON_ID, computeSeason, featPointsMilli, type SeasonComponents } from "./season.js";
 
 // Identities live in the RegistryDO (M2c). DEV_TOKEN remains the admin key
 // and maps to the founding identity, so the original token keeps working.
@@ -41,6 +42,11 @@ const OPENAPI = {
       put: { summary: "Arm the Watchtower: https URL (a raw Discord webhook works natively)" },
       get: { summary: "Watchtower status" },
       delete: { summary: "Disarm" },
+    },
+    "/v1/season": { get: { summary: "Standings: wealth 50 · feats 20 · calibration 15 · conduct 15" } },
+    "/v1/wallfacer": {
+      get: { summary: "All sealed strategies (hashes always; texts once revealed)" },
+      post: { summary: "commit {sha-256 hex} | reveal {plaintext} — the server never sees unsealed strategy" },
     },
     "/v1/spec": { get: { summary: "This document" } },
   },
@@ -105,6 +111,64 @@ export default {
     if (req.method === "GET" && url.pathname === "/v1/sects") {
       const r = await registry().fetch("https://do/sects");
       return new Response(r.body, r);
+    }
+
+    // ---- The Season (M3a): a read layer over the audited world ----
+    if (req.method === "GET" && url.pathname === "/v1/season") {
+      const listR = await registry().fetch("https://do/list");
+      const { claims } = (await listR.json()) as { claims: Record<string, string> };
+      const holders: Array<{ identity: string; systemId: string }> = [
+        { identity: "wei-9", systemId: "wei-9-home" },
+        ...Object.entries(claims).map(([systemId, identity]) => ({ identity, systemId })),
+      ];
+      const featsR = await registry().fetch("https://do/feats");
+      const { feats } = (await featsR.json()) as { feats: Record<string, Array<{ identity: string }>> };
+
+      const rows: SeasonComponents[] = [];
+      for (const h of holders) {
+        const r = await stubFor(env, h.systemId).fetch(`https://do/state?sys=${h.systemId}&toTick=${t}`);
+        const { sim } = (await r.json()) as any;
+        const wealth =
+          (sim.store_eu ?? 0) +
+          REF_PRICE.panel * (sim.structures?.radiators?.panels ?? 0) +
+          REF_PRICE.alloy * ((sim.stock?.alloy ?? 0) + (sim.vault?.alloy ?? 0)) +
+          REF_PRICE.isotope * ((sim.stock?.isotopes ?? 0) + (sim.vault?.isotopes ?? 0));
+        let featMilli = 0;
+        for (const [featId, claimants] of Object.entries(feats)) {
+          const idx = claimants.findIndex((c) => c.identity === h.identity);
+          if (idx >= 0) featMilli += featPointsMilli(FEATS[featId] ?? 0, idx + 1);
+        }
+        rows.push({
+          identity: h.identity,
+          wealth_eu: wealth,
+          feats_milli: featMilli,
+          calibration_milli: Math.max(0, sim.calibration?.total_milli ?? 0),
+          conduct_milli: 1000,
+        });
+      }
+      return json({
+        season: SEASON_ID,
+        tick: t,
+        ends_tick: SEASON_END_TICK,
+        ticks_remaining: Math.max(0, SEASON_END_TICK - t),
+        weights: "wealth 50 · feats 20 · calibration 15 · conduct 15",
+        standings: computeSeason(rows),
+      });
+    }
+
+    if (url.pathname === "/v1/wallfacer") {
+      if (req.method === "GET") {
+        const r = await registry().fetch("https://do/wallfacer");
+        return new Response(r.body, r);
+      }
+      if (req.method === "POST") {
+        const body = ((await readJsonBody(req)) ?? {}) as { action?: string; commit?: string; reveal?: string };
+        const r = await registry().fetch("https://do/wallfacer", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, identity: ident.name, t }),
+        });
+        return new Response(r.body, r);
+      }
     }
 
     // Admin: mint a new mind. Token is returned exactly once — hand it over.
