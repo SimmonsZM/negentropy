@@ -1,0 +1,18 @@
+{
+  // Negentropy M1 "Cold Spark" — single-system tick server.
+  // Deploy to a PERSONAL Cloudflare account (not a work account).
+  "name": "negentropy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "triggers": { "crons": ["0 0,6,12,18 * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "SYSTEM_DO", "class_name": "SystemDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SystemDO"] }],
+  "vars": {
+    "WORLD_SEED": "negentropy-season-0",
+    "GENESIS_EPOCH": "1767225600"
+  }
+  // Secrets (set at deploy time, never committed):
+  //   npx wrangler secret put DEV_TOKEN
+}
