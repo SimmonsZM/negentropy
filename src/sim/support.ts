@@ -25,6 +25,8 @@ export function genesisState(): SimState {
     receivedSignals: [],
     decodedFrom: [],
     outbox: [],
+    realm: "embodied",
+    migrationCooldownUntil: 0,
   };
 }
 

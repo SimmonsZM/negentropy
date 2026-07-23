@@ -3,7 +3,8 @@
 // M2a: per-system identity (?sys=), light-lagged inbox, beacon outbox drain,
 // and a public-view snapshot ring so neighbors can observe you as you WERE.
 
-import { ORDER_HORIZON_TICKS, REFLEX_EDIT_COST, SIM_VERSION, seedFrom } from "../sim/core.js";
+import { REFLEX_EDIT_COST, SIM_VERSION, seedFrom } from "../sim/core.js";
+import { HORIZON_BY_REALM, SLOTS_BY_REALM } from "../sim/stages.js";
 import { defaultInstincts, ruleCost, type Rule } from "../sim/reflex.js";
 import { chargeReflexEdit, resolve } from "../sim/resolve.js";
 import { getSystem } from "../sim/starmap.js";
@@ -17,7 +18,6 @@ export interface Env {
   GENESIS_EPOCH: string;
 }
 
-const MAX_RULES_M1 = 4; // Embodied slot count; 2 are locked instincts (Deep Dive §5/§14)
 const SNAPSHOT_RING = 12; // ticks of public history kept for lagged observation
 
 /** What a distant observer can see of this system: its thermal signature.
@@ -50,6 +50,8 @@ export class SystemDO {
       if (p.sim.receivedSignals === undefined) { p.sim.receivedSignals = []; repaired = true; }
       if (p.sim.decodedFrom === undefined) { p.sim.decodedFrom = []; repaired = true; }
       if (p.sim.outbox === undefined) { p.sim.outbox = []; repaired = true; }
+      if (p.sim.realm === undefined) { p.sim.realm = "embodied"; repaired = true; }
+      if (p.sim.migrationCooldownUntil === undefined) { p.sim.migrationCooldownUntil = 0; repaired = true; }
       if (p.systemId === undefined) { p.systemId = sysParam ?? "wei-9-home"; repaired = true; }
       if (p.inbox === undefined) { p.inbox = []; repaired = true; }
       if (repaired) await this.ctx.storage.put("p", p);
@@ -86,6 +88,12 @@ export class SystemDO {
       const inputs = stableStringify({ v: SIM_VERSION, t, orders, rules: p.rules, inboxDue: due });
       p.chain = await chainLink(p.chain, inputs, await stateHash(p.sim));
       await this.ctx.storage.delete(`orders:${t}`);
+
+      // Mirror Sight's prize: once Foundation is reached, the instincts are
+      // yours to author. Idempotent; the rules used each tick are chain inputs.
+      if (p.sim.realm === "foundation" && p.rules.some((r) => r.locked)) {
+        p.rules = p.rules.map((r) => ({ ...r, locked: false }));
+      }
 
       // Public-view snapshot ring: what the light leaving us this tick carries.
       const snap: PublicView = {
@@ -162,7 +170,7 @@ export class SystemDO {
 
     if (req.method === "GET" && url.pathname === "/state") {
       const pending: Array<{ tick: number; orders: Order[] }> = [];
-      for (let i = 1; i <= ORDER_HORIZON_TICKS; i++) {
+      for (let i = 1; i <= HORIZON_BY_REALM[p.sim.realm]; i++) {
         const tk = p.sim.tick + i;
         const o = await this.ctx.storage.get<Order[]>(`orders:${tk}`);
         if (o && o.length) pending.push({ tick: tk, orders: o });
@@ -191,9 +199,10 @@ export class SystemDO {
       if (!body || !Array.isArray(body.orders)) return json({ error: "invalid JSON body" }, 400);
       const target = body.tick ?? p.sim.tick + 1;
       if (target <= p.sim.tick) return json({ error: "tick already resolved" }, 409);
-      if (target > p.sim.tick + ORDER_HORIZON_TICKS) {
+      const horizon = HORIZON_BY_REALM[p.sim.realm];
+      if (target > p.sim.tick + horizon) {
         return json(
-          { error: `order horizon exceeded — Embodied realm may queue at most ${ORDER_HORIZON_TICKS} ticks ahead` },
+          { error: `order horizon exceeded — the ${p.sim.realm} realm may queue at most ${horizon} ticks ahead` },
           400,
         );
       }
@@ -205,7 +214,8 @@ export class SystemDO {
     if (req.method === "PUT" && url.pathname === "/rules") {
       const incoming = (await readJson()) as Rule[] | null;
       if (!incoming || !Array.isArray(incoming)) return json({ error: "invalid JSON body" }, 400);
-      if (incoming.length > MAX_RULES_M1) return json({ error: `max ${MAX_RULES_M1} rules at this realm` }, 400);
+      const slots = SLOTS_BY_REALM[p.sim.realm];
+      if (incoming.length > slots) return json({ error: `max ${slots} rules at this realm` }, 400);
       for (const locked of p.rules.filter((r) => r.locked)) {
         const match = incoming.find((r) => r.id === locked.id);
         if (!match || stableStringify(match) !== stableStringify(locked)) {

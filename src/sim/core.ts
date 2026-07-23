@@ -14,6 +14,7 @@ export const ORDER_COST: Record<string, number> = {
   build_radiator: 3,
   repair_systems: 2,
   decode_signal: 1,
+  begin_migration: 10,
   noop: 0,
 };
 
@@ -27,6 +28,14 @@ export const ORDER_HORIZON_TICKS = 4; // Embodied
 export const MIN_LANE_LAG = 2; // ticks; cron-synced systems can never deliver into a peer's past
 export const BEACON_INTERVAL_TICKS = 16; // ancient beacons pulse every 4 days
 export const SIGNALS_MAX = 24; // received-signal buffer cap
+
+// ---- The Migration (M2b): the first tribulation ----
+export const MIGRATION_WINDOW = 12; // ticks (3 days) — Deep Dive §10's trial-window pattern
+export const MIGRATION_AP = 10; // a full tick's AP (Deep Dive §4.3)
+export const MIGRATION_EU = 400; // the upload's embodied cost (books to built_eu)
+export const MIGRATION_BAR = 1200; // absolute wealth bar over the window — judgment, not just a dead mirror
+export const MIGRATION_COOLDOWN = 28; // ticks (1 week) between attempts
+export const TRIAL_EVENTS = 3; // seeded perturbations per window, identical for you and the copy
 
 // Bumped when the tick function's semantics change; folded into the audit
 // chain so a version drift is tamper-evident, not silent (Deep Dive §1).

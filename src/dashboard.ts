@@ -263,6 +263,13 @@ export const DASHBOARD_HTML = `<!doctype html>
         <div id="pending"><div>— nothing queued on the server —</div></div>
       </div>
       <div class="card wide" style="margin-top:16px;">
+        <h2>Tribulation — the Migration</h2>
+        <div id="trib"><div>—</div></div>
+        <div class="ctl">
+          <button class="btn hot hidden" id="h-migrate">Begin the Migration <span class="pill">10 AP + 400 eu</span></button>
+        </div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
         <h2>Log Tail</h2>
         <div id="log"></div>
       </div>
@@ -470,6 +477,9 @@ export const DASHBOARD_HTML = `<!doctype html>
     document.getElementById("h-repair").addEventListener("click", function () {
       stageOrder({ kind: "repair_systems" }, "repair_systems (100 eu)", 2);
     });
+    document.getElementById("h-migrate").addEventListener("click", function () {
+      stageOrder({ kind: "begin_migration" }, "BEGIN THE MIGRATION (400 eu)", 10);
+    });
     document.getElementById("h-discard").addEventListener("click", function () { staged = []; renderQueue(); });
     document.getElementById("h-send").addEventListener("click", async function () {
       try {
@@ -582,6 +592,41 @@ export const DASHBOARD_HTML = `<!doctype html>
     } catch (e) { /* keep last render */ }
   }
 
+  function renderTrial(sys, self) {
+    var box = document.getElementById("trib");
+    var btn = document.getElementById("h-migrate");
+    btn.classList.add("hidden");
+    box.innerHTML = "";
+    function line(t, cls) {
+      var d = document.createElement("div");
+      d.textContent = t;
+      if (cls) d.className = cls;
+      box.appendChild(d);
+    }
+    if (sys.realm === "foundation") {
+      line("✓ The Migration is behind you. Foundation holds. The climb continues, higher.");
+      return;
+    }
+    if (sys.trial) {
+      var left = sys.trial.ends_tick - sys.tick;
+      line("ACTIVE — " + left + " tick" + (left === 1 ? "" : "s") + " remain. You vs the copy, same sky, same storms.");
+      line("you:  " + sys.trial.you_wealth + " eu");
+      line("copy: " + sys.trial.copy_wealth + " eu" + (sys.trial.copy_damaged ? "  (damaged)" : ""));
+      line("bar:  " + sys.trial.bar + " eu — beat both, end alive and undamaged");
+      return;
+    }
+    if (sys.migration_cooldown_until > sys.tick) {
+      line("The sky is closed until t" + sys.migration_cooldown_until + ". Prepare better.", "flare");
+      return;
+    }
+    if (sys.stage !== "control") {
+      line("Locked — reach Control (3/9) first. The climb precedes the leap.");
+      return;
+    }
+    line("ELIGIBLE. The upload copies you exactly — reflexes, instincts, doubts — and the sky tests you both for 12 ticks. Win by out-deciding yourself.");
+    btn.classList.remove("hidden");
+  }
+
   function renderLog(lines) {
     var log = document.getElementById("log");
     log.innerHTML = "";
@@ -649,6 +694,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 
       renderLog(sys.log_tail);
       renderSignals(sys.signals);
+      renderTrial(sys, self);
       renderStarmap();
 
       lastSelf = self;

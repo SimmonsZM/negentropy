@@ -3,7 +3,7 @@
 // M2a: the world is a starmap; observation of neighbors is light-lagged.
 
 import { SIM_VERSION, TICK_SECONDS } from "./sim/core.js";
-import { STAGE_LABELS, type Stage } from "./sim/stages.js";
+import { REALM_LABELS, SIGHTS_BY_REALM, SLOTS_BY_REALM, STAGE_LABELS, type Realm, type Stage } from "./sim/stages.js";
 import { allSystems, getSystem, laneLag, neighborsOf } from "./sim/starmap.js";
 import { DASHBOARD_HTML } from "./dashboard.js";
 import type { Env } from "./do/SystemDO.js";
@@ -66,17 +66,22 @@ export default {
         const undecoded = (sim.receivedSignals as any[]).filter(
           (x) => !x.decoded && !(sim.decodedFrom as string[]).includes(x.from),
         ).length;
+        const realm = (sim.realm ?? "embodied") as Realm;
         return json({
           identity: "wei-9",
-          realm: "Embodied",
+          realm: REALM_LABELS[realm],
           stage: STAGE_LABELS[sim.stage as Stage] ?? sim.stage,
-          sights: ["flow"],
+          sights: SIGHTS_BY_REALM[realm],
           sim_version: SIM_VERSION,
           ap: sim.ap,
           tick: sim.tick,
           signals: { held: sim.receivedSignals.length, undecoded, decoded_from: sim.decodedFrom },
+          trial: sim.trial
+            ? { kind: sim.trial.kind, ends_tick: sim.trial.endTick, you: sim.trial.playerWealth, copy: sim.trial.mirror.wealth }
+            : null,
+          migration_cooldown_until: sim.migrationCooldownUntil,
           chain_head: chain,
-          rule_slots: { used: rules.length, max: 4, locked: rules.filter((x: any) => x.locked).length },
+          rule_slots: { used: rules.length, max: SLOTS_BY_REALM[realm], locked: rules.filter((x: any) => x.locked).length },
         });
       }
       // Fog by omission: only Flow-Sight fields leave the server (GDD §12.0, DD §14).
@@ -87,6 +92,20 @@ export default {
         structures: sim.structures,
         damaged: sim.damaged,
         signals: sim.receivedSignals.slice(-8),
+        trial: sim.trial
+          ? {
+              kind: sim.trial.kind,
+              started_tick: sim.trial.startedTick,
+              ends_tick: sim.trial.endTick,
+              you_wealth: sim.trial.playerWealth,
+              copy_wealth: sim.trial.mirror.wealth,
+              copy_damaged: sim.trial.mirror.damaged,
+              bar: 1200,
+            }
+          : null,
+        realm: sim.realm ?? "embodied",
+        stage: sim.stage,
+        migration_cooldown_until: sim.migrationCooldownUntil ?? 0,
         log_tail: sim.log.slice(-20),
       });
     }

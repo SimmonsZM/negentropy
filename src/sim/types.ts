@@ -1,11 +1,40 @@
 // Negentropy sim types. State is plain JSON (integers + strings only)
 // so it hash-chains, clones, and persists byte-stably.
 
-import type { Stage } from "./stages.js";
+import type { Realm, Stage } from "./stages.js";
 
 export interface Structures {
   collectors: { throttle_milli: number }; // 0..1000
   radiators: { panels: number; t_rad_milli: number }; // run-temp in milli-T0
+}
+
+/** Seeded trial perturbation — conservation-clean by construction: each type
+ * only reshapes flows the ledger already balances (flux is external; eta
+ * redistributes intake between store and heat; a faulted panel reduces D). */
+export interface TrialEvent {
+  tick: number;
+  kind: "flare_echo" | "impurity" | "panel_fault";
+}
+
+/** The copy: your state at upload, run by your frozen reflexes, no orders. */
+export interface MirrorEnt {
+  store_eu: number;
+  heatBank_eu: number;
+  structures: Structures;
+  damaged: boolean;
+  metricsPrev: Record<string, number>;
+  ruleMeta: Record<string, number>;
+  wealth: number;
+}
+
+export interface TrialState {
+  kind: "migration";
+  startedTick: number;
+  endTick: number;
+  events: TrialEvent[];
+  rulesFrozen: unknown[]; // reflex set at upload, locked instincts included
+  mirror: MirrorEnt;
+  playerWealth: number;
 }
 
 /** Per-tick conservation ledger (Deep Dive §2):
@@ -58,6 +87,9 @@ export interface SimState {
   receivedSignals: ReceivedSignal[]; // light-lagged mail, capped at SIGNALS_MAX
   decodedFrom: string[]; // system ids whose beacons this mind has decoded
   outbox: Envelope[]; // THIS tick's emissions only; DO drains after each resolve
+  realm: Realm; // the big ladder (M2b)
+  trial?: TrialState; // active tribulation, if any
+  migrationCooldownUntil: number; // tick before which a new attempt is refused
 }
 
 export type Order =
@@ -66,6 +98,7 @@ export type Order =
   | { kind: "build_radiator" }
   | { kind: "repair_systems" }
   | { kind: "decode_signal" }
+  | { kind: "begin_migration" }
   | { kind: "noop" };
 
 export const LOG_MAX = 200;

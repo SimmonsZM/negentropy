@@ -57,3 +57,25 @@ export function advanceStage(
 
   return { stage, positiveStreak };
 }
+
+// ---- Realms (M2b: the Migration opens the second rung of the big ladder) ----
+
+export type Realm = "embodied" | "foundation";
+
+export const REALM_LABELS: Record<Realm, string> = {
+  embodied: "Embodied",
+  foundation: "Foundation",
+};
+
+/** Reflex slot allotment by realm (Deep Dive §5; tranche delivery is future work). */
+export const SLOTS_BY_REALM: Record<Realm, number> = { embodied: 4, foundation: 8 };
+
+/** Order/forecast horizon by realm (Deep Dive §14: 4 / 28 / 336 / 1008 / ∞). */
+export const HORIZON_BY_REALM: Record<Realm, number> = { embodied: 4, foundation: 28 };
+
+/** Sights by realm (Deep Dive §14). Mirror Sight is the Migration's prize —
+ * it is what makes your own instincts editable at last. */
+export const SIGHTS_BY_REALM: Record<Realm, string[]> = {
+  embodied: ["flow"],
+  foundation: ["flow", "mirror"],
+};
