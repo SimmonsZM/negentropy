@@ -13,6 +13,7 @@ export const ORDER_COST: Record<string, number> = {
   set_radiator_temp: 1,
   build_radiator: 3,
   repair_systems: 2,
+  decode_signal: 1,
   noop: 0,
 };
 
@@ -23,10 +24,13 @@ export const REPAIR_EU = 100; // repair_systems: exergy drawn from store
 
 // Order-queue horizon by realm (Deep Dive §14): 4 / 28 / 336 / 1008 / ∞.
 export const ORDER_HORIZON_TICKS = 4; // Embodied
+export const MIN_LANE_LAG = 2; // ticks; cron-synced systems can never deliver into a peer's past
+export const BEACON_INTERVAL_TICKS = 16; // ancient beacons pulse every 4 days
+export const SIGNALS_MAX = 24; // received-signal buffer cap
 
 // Bumped when the tick function's semantics change; folded into the audit
 // chain so a version drift is tamper-evident, not silent (Deep Dive §1).
-export const SIM_VERSION = 2;
+export const SIM_VERSION = 3; // v3: multi-system starmap, light-lagged signals (M2a)
 
 // Radiator run-temp band for set_radiator_temp (milli-T0).
 export const T_RAD_MIN = 500;
@@ -78,13 +82,19 @@ export function seedFrom(worldSeed: string, systemId: string): number {
 // ---- Physics (M1 slice) ----
 
 /** Flares are scheduled draws: the seed decides them in advance, so
- * live play and lazy catch-up agree exactly. */
-export function flareActive(seedKey: number, tick: number): boolean {
-  return roll(seedKey, tick, 0xf1a4e, 1000) < FLARE_PER_MILLE;
+ * live play and lazy catch-up agree exactly. Parameterized per-system (M2a);
+ * the salt is unchanged, so wei-9-home's 800-tick history is untouched. */
+export function flareActive(seedKey: number, tick: number, perMille: number = FLARE_PER_MILLE): boolean {
+  return roll(seedKey, tick, 0xf1a4e, 1000) < perMille;
 }
 
-export function fluxAt(seedKey: number, tick: number): number {
-  return BASE_FLUX_EU * (flareActive(seedKey, tick) ? FLARE_MULT : 1);
+export function fluxAt(
+  seedKey: number,
+  tick: number,
+  baseFlux: number = BASE_FLUX_EU,
+  perMille: number = FLARE_PER_MILLE,
+): number {
+  return baseFlux * (flareActive(seedKey, tick, perMille) ? FLARE_MULT : 1);
 }
 
 /** Radiator dissipation: D = panels · RAD_K · (T_r/1000)^4 — Stefan–Boltzmann,

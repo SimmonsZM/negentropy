@@ -1,11 +1,14 @@
 // SystemDO — one star system: state + deterministic sim + audit chain.
 // Cold when unobserved; advances lazily on contact or cron (Deep Dive §1, §12).
+// M2a: per-system identity (?sys=), light-lagged inbox, beacon outbox drain,
+// and a public-view snapshot ring so neighbors can observe you as you WERE.
 
 import { ORDER_HORIZON_TICKS, REFLEX_EDIT_COST, SIM_VERSION, seedFrom } from "../sim/core.js";
 import { defaultInstincts, ruleCost, type Rule } from "../sim/reflex.js";
 import { chargeReflexEdit, resolve } from "../sim/resolve.js";
+import { getSystem } from "../sim/starmap.js";
 import { chainLink, genesisState, stableStringify, stateHash } from "../sim/support.js";
-import type { Order, SimState } from "../sim/types.js";
+import type { Envelope, Order, SimState } from "../sim/types.js";
 
 export interface Env {
   SYSTEM_DO: DurableObjectNamespace;
@@ -15,50 +18,103 @@ export interface Env {
 }
 
 const MAX_RULES_M1 = 4; // Embodied slot count; 2 are locked instincts (Deep Dive §5/§14)
+const SNAPSHOT_RING = 12; // ticks of public history kept for lagged observation
+
+/** What a distant observer can see of this system: its thermal signature.
+ * Stealth-is-heat (Deep Dive §2/§7) — the store is NOT here by design. */
+interface PublicView {
+  tick: number;
+  phase_angle: number;
+  radiated_eu: number;
+  flare: boolean;
+}
 
 interface Persisted {
   sim: SimState;
   rules: Rule[];
   chain: string; // latest audit link
+  systemId: string; // which star this DO is (M2a; pre-M2a blobs default wei-9-home)
+  inbox: Envelope[]; // undelivered light-lagged mail, ordered on insert
 }
 
 export class SystemDO {
   constructor(private ctx: DurableObjectState, private env: Env) {}
 
-  private async load(): Promise<Persisted> {
+  private async load(sysParam: string | null): Promise<Persisted> {
     const p = await this.ctx.storage.get<Persisted>("p");
     if (p) {
-      // Migrate v1 blobs that predate the stage engine: default missing fields
-      // and persist the repaired blob back only if a default was actually applied.
+      // Migrate older blobs: default fields that predate their feature.
       let repaired = false;
       if (p.sim.stage === undefined) { p.sim.stage = "survive"; repaired = true; }
       if (p.sim.positiveStreak === undefined) { p.sim.positiveStreak = 0; repaired = true; }
+      if (p.sim.receivedSignals === undefined) { p.sim.receivedSignals = []; repaired = true; }
+      if (p.sim.decodedFrom === undefined) { p.sim.decodedFrom = []; repaired = true; }
+      if (p.sim.outbox === undefined) { p.sim.outbox = []; repaired = true; }
+      if (p.systemId === undefined) { p.systemId = sysParam ?? "wei-9-home"; repaired = true; }
+      if (p.inbox === undefined) { p.inbox = []; repaired = true; }
       if (repaired) await this.ctx.storage.put("p", p);
       return p;
     }
-    const fresh: Persisted = { sim: genesisState(), rules: defaultInstincts(), chain: "genesis" };
+    const fresh: Persisted = {
+      sim: genesisState(),
+      rules: defaultInstincts(),
+      chain: "genesis",
+      systemId: sysParam ?? "wei-9-home",
+      inbox: [],
+    };
     await this.ctx.storage.put("p", fresh);
     return fresh;
   }
 
   private async advanceTo(p: Persisted, toTick: number): Promise<void> {
-    const seedKey = seedFrom(this.env.WORLD_SEED, "wei-9-home");
+    const sys = getSystem(p.systemId);
+    if (!sys) throw new Error(`unknown system ${p.systemId}`);
+    const seedKey = seedFrom(this.env.WORLD_SEED, sys.id);
+
     while (p.sim.tick < toTick) {
       const t = p.sim.tick + 1;
       const orders = (await this.ctx.storage.get<Order[]>(`orders:${t}`)) ?? [];
-      p.sim = resolve(p.sim, orders, p.rules, seedKey);
-      const inputs = stableStringify({ v: SIM_VERSION, t, orders, rules: p.rules });
+
+      // This tick's mail: deterministic order (deliver_at, from, emitted_t).
+      const due = p.inbox
+        .filter((e) => e.deliver_at <= t)
+        .sort((a, b) => a.deliver_at - b.deliver_at || (a.from < b.from ? -1 : 1) || a.emitted_t - b.emitted_t);
+      p.inbox = p.inbox.filter((e) => e.deliver_at > t);
+
+      p.sim = resolve(p.sim, orders, p.rules, seedKey, sys, due);
+
+      const inputs = stableStringify({ v: SIM_VERSION, t, orders, rules: p.rules, inboxDue: due });
       p.chain = await chainLink(p.chain, inputs, await stateHash(p.sim));
       await this.ctx.storage.delete(`orders:${t}`);
+
+      // Public-view snapshot ring: what the light leaving us this tick carries.
+      const snap: PublicView = {
+        tick: t,
+        phase_angle: p.sim.phaseAngle,
+        radiated_eu: p.sim.ledger.heatRadiated_eu,
+        flare: p.sim.ledger.flare,
+      };
+      await this.ctx.storage.put(`snap:${t}`, snap);
+      await this.ctx.storage.delete(`snap:${t - SNAPSHOT_RING}`);
+
+      // Drain this tick's emissions to their destination DOs (M2a: rare beacon
+      // pulses across <=4 lanes — sequential awaits are fine at this scale).
+      for (const env of p.sim.outbox) {
+        const stub = this.env.SYSTEM_DO.get(this.env.SYSTEM_DO.idFromName(env.to));
+        await stub.fetch(`https://do/deliver?sys=${env.to}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(env),
+        });
+      }
+      p.sim.outbox = [];
     }
     await this.ctx.storage.put("p", p);
   }
 
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    const p = await this.load();
-    const toTick = Number(url.searchParams.get("toTick") ?? p.sim.tick);
-    await this.advanceTo(p, toTick); // lazy catch-up on every contact
+    const p = await this.load(url.searchParams.get("sys"));
 
     const json = (v: unknown, status = 200) =>
       new Response(JSON.stringify(v, null, 2), { status, headers: { "content-type": "application/json" } });
@@ -71,8 +127,36 @@ export class SystemDO {
       }
     };
 
+    // Mail drop: append to the inbox WITHOUT advancing (delivery must never
+    // force the recipient's clock — its own cron/observers do that).
+    if (req.method === "POST" && url.pathname === "/deliver") {
+      const env = (await readJson()) as Envelope | null;
+      if (!env || typeof env.deliver_at !== "number" || typeof env.from !== "string") {
+        return json({ error: "invalid envelope" }, 400);
+      }
+      if (env.deliver_at <= p.sim.tick) {
+        // Defensive clamp: with MIN_LANE_LAG >= 2 and cron-synced clocks this
+        // should be unreachable; if it fires, we deliver at the next tick and log.
+        env.deliver_at = p.sim.tick + 1;
+      }
+      p.inbox.push(env);
+      await this.ctx.storage.put("p", p);
+      return json({ delivered_to: p.systemId, deliver_at: env.deliver_at });
+    }
+
+    const toTick = Number(url.searchParams.get("toTick") ?? p.sim.tick);
+    await this.advanceTo(p, toTick); // lazy catch-up on every contact
+
     if (req.method === "GET" && url.pathname === "/state") {
-      return json({ sim: p.sim, chain: p.chain, rules: p.rules });
+      return json({ sim: p.sim, chain: p.chain, rules: p.rules, systemId: p.systemId });
+    }
+
+    // Lagged public view for a distant observer: the snapshot at (their now - lag).
+    if (req.method === "GET" && url.pathname === "/snapshot") {
+      const at = Number(url.searchParams.get("at"));
+      const snap = await this.ctx.storage.get<PublicView>(`snap:${at}`);
+      if (!snap) return json({ error: "too faint — light from that tick has not been kept" }, 404);
+      return json(snap);
     }
 
     if (req.method === "POST" && url.pathname === "/orders") {

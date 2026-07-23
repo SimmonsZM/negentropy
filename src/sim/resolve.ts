@@ -3,14 +3,15 @@
 // Deterministic: same inputs ⇒ byte-identical output. Conservation asserted.
 
 import {
-  AP_BANK_CAP, AP_PER_TICK, BASE_LOAD_EU, BUILD_RADIATOR_EU, ETA_MILLI,
-  LEAK_PER_MILLE, ORDER_COST, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU,
+  AP_BANK_CAP, AP_PER_TICK, BASE_LOAD_EU, BEACON_INTERVAL_TICKS, BUILD_RADIATOR_EU, ETA_MILLI,
+  LEAK_PER_MILLE, ORDER_COST, RAD_FAIL_DIVISOR, RAD_FAIL_TEMP_MILLI, REPAIR_EU, SIGNALS_MAX,
   T_RAD_MAX, T_RAD_MIN, TEMP_MAX, dissipation, fluxAt, flareActive, phaseAngle,
   roll,
 } from "./core.js";
 import { evaluate, type Action, type Metrics, type Rule } from "./reflex.js";
 import { advanceStage } from "./stages.js";
-import { pushLog, type Order, type SimState } from "./types.js";
+import { getSystem, neighborsOf, type SystemDef } from "./starmap.js";
+import { pushLog, type Envelope, type Order, type SimState } from "./types.js";
 
 export class ConservationError extends Error {}
 
@@ -26,13 +27,23 @@ function applyAction(s: SimState, a: Action, t: number): void {
   }
 }
 
-export function resolve(prev: SimState, orders: Order[], rules: Rule[], seedKey: number): SimState {
+/** sys defaults to wei-9-home so all pre-M2a call sites (and its 800-tick
+ * audited history) resolve with byte-identical physics. inboxDue is this
+ * tick's light-lagged mail, selected by the DO layer (deliver_at <= t). */
+export function resolve(
+  prev: SimState,
+  orders: Order[],
+  rules: Rule[],
+  seedKey: number,
+  sys: SystemDef = getSystem("wei-9-home")!,
+  inboxDue: Envelope[] = [],
+): SimState {
   const s = clone(prev);
   const t = s.tick + 1;
 
-  // ---- Phase 1: physics ----
-  const flux = fluxAt(seedKey, t);
-  const flare = flareActive(seedKey, t);
+  // ---- Phase 1: physics (per-system parameters, M2a) ----
+  const flux = fluxAt(seedKey, t, sys.base_flux_eu, sys.flare_per_mille);
+  const flare = flareActive(seedKey, t, sys.flare_per_mille);
   s.phaseAngle = phaseAngle(t);
   s.ap = Math.min(AP_BANK_CAP, s.ap + AP_PER_TICK);
 
@@ -55,6 +66,7 @@ export function resolve(prev: SimState, orders: Order[], rules: Rule[], seedKey:
   const store0 = s.store_eu;
   const bank0 = s.heatBank_eu;
   let built = 0; // exergy spent on structural orders this tick (builds + repairs)
+  let decodedNew = false; // a foreign beacon was decoded this tick (Connect gate)
 
   // ---- Phase 3: orders (AP-metered, initiative = submission order) ----
   for (const o of orders) {
@@ -97,6 +109,17 @@ export function resolve(prev: SimState, orders: Order[], rules: Rule[], seedKey:
       built += REPAIR_EU;
       s.damaged = false;
       pushLog(s, `[t${t}] systems repaired — collectors back online`);
+    } else if (o.kind === "decode_signal") {
+      const target = s.receivedSignals.find((sig) => !sig.decoded && !s.decodedFrom.includes(sig.from));
+      if (!target) {
+        pushLog(s, `[t${t}] decode_signal rejected — no undecoded foreign signals held`);
+        continue; // no AP spent when there is nothing to decode
+      }
+      s.ap -= cost;
+      target.decoded = true;
+      s.decodedFrom.push(target.from);
+      decodedNew = true;
+      pushLog(s, `[t${t}] SIGNAL DECODED — ${target.from} (emitted t${target.emitted_t}): "${target.payload}"`);
     }
   }
 
@@ -161,13 +184,48 @@ export function resolve(prev: SimState, orders: Order[], rules: Rule[], seedKey:
   };
   if (flare) pushLog(s, `[t${t}] stellar flare (flux x3)`);
 
-  // ---- Stage engine: Survive's sustained-budget gate (Deep Dive §14) ----
-  const stageStep = advanceStage(s.stage, s.positiveStreak, dStore, t);
+  // ---- Stage engine: the nine-fold climb's live gates (Deep Dive §14) ----
+  const stageStep = advanceStage(s.stage, s.positiveStreak, { dStore, decodedNew }, t);
   s.stage = stageStep.stage;
   s.positiveStreak = stageStep.positiveStreak;
   if (stageStep.completedLog) pushLog(s, stageStep.completedLog);
 
-  // ---- Phases 4–5: markets, dispatch — M2 ----
+  // ---- Phase 4: markets — M2b ----
+
+  // ---- Phase 5: dispatch — light-lagged mail in, beacon pulses out (M2a) ----
+  // Delivery lands AFTER orders: mail that arrives at tick t is readable (and
+  // decodable) from t+1 — you read the day's post once the day has resolved.
+  for (const env of inboxDue) {
+    s.receivedSignals.push({
+      from: env.from,
+      emitted_t: env.emitted_t,
+      received_t: t,
+      payload: env.payload,
+      decoded: false,
+    });
+    pushLog(s, `[t${t}] signal received from ${env.from} (emitted t${env.emitted_t}, ${t - env.emitted_t} ticks in flight)`);
+  }
+  if (s.receivedSignals.length > SIGNALS_MAX) {
+    s.receivedSignals.splice(0, s.receivedSignals.length - SIGNALS_MAX);
+  }
+
+  // Ancient beacons are pre-collapse automata: their pulse is diegetically free
+  // (their books closed eons ago), deterministic, and scheduled — catch-up exact.
+  const emissions: Envelope[] = [];
+  if (sys.beacon && t % BEACON_INTERVAL_TICKS === 0) {
+    for (const n of neighborsOf(sys.id)) {
+      emissions.push({
+        from: sys.id,
+        to: n.sys.id,
+        kind: "beacon",
+        emitted_t: t,
+        deliver_at: t + n.lag_ticks,
+        payload: `…${sys.name} beacon, cycle ${Math.floor(t / BEACON_INTERVAL_TICKS)}: the gradient endures…`,
+      });
+    }
+    pushLog(s, `[t${t}] ancient beacon pulse — ${emissions.length} lanes`);
+  }
+  s.outbox = emissions;
 
   s.metricsPrev = cur;
   s.tick = t;

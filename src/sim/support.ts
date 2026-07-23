@@ -22,6 +22,9 @@ export function genesisState(): SimState {
     ledger: { tick: 0, intake_eu: 0, dStore_eu: 0, heatRadiated_eu: 0, dHeatBank_eu: 0, built_eu: 0, flare: false },
     stage: "survive",
     positiveStreak: 0,
+    receivedSignals: [],
+    decodedFrom: [],
+    outbox: [],
   };
 }
 

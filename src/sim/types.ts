@@ -22,6 +22,25 @@ export interface Ledger {
   flare: boolean;
 }
 
+/** A light-lagged message between systems. deliver_at is emitted_t + lane lag;
+ * the lag lives in the DATA, not the transport (Deep Dive §12 — no queues needed). */
+export interface Envelope {
+  from: string; // system id
+  to: string; // system id
+  kind: "beacon";
+  emitted_t: number;
+  deliver_at: number;
+  payload: string;
+}
+
+export interface ReceivedSignal {
+  from: string;
+  emitted_t: number;
+  received_t: number;
+  payload: string;
+  decoded: boolean;
+}
+
 export interface SimState {
   tick: number;
   phaseAngle: number;
@@ -36,6 +55,9 @@ export interface SimState {
   ledger: Ledger; // last tick's books
   stage: Stage; // nine-fold climb position (Deep Dive §14)
   positiveStreak: number; // consecutive positive-dStore ticks toward Survive
+  receivedSignals: ReceivedSignal[]; // light-lagged mail, capped at SIGNALS_MAX
+  decodedFrom: string[]; // system ids whose beacons this mind has decoded
+  outbox: Envelope[]; // THIS tick's emissions only; DO drains after each resolve
 }
 
 export type Order =
@@ -43,6 +65,7 @@ export type Order =
   | { kind: "set_radiator_temp"; value_milli: number }
   | { kind: "build_radiator" }
   | { kind: "repair_systems" }
+  | { kind: "decode_signal" }
   | { kind: "noop" };
 
 export const LOG_MAX = 200;

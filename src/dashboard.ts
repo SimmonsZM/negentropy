@@ -210,6 +210,14 @@ export const DASHBOARD_HTML = `<!doctype html>
         <h2>Log Tail</h2>
         <div id="log"></div>
       </div>
+      <div class="card wide" style="margin-top:16px;">
+        <h2>Starmap — neighbors, as they were</h2>
+        <div id="starmap"><div>— scanning —</div></div>
+      </div>
+      <div class="card wide" style="margin-top:16px;">
+        <h2>Signals</h2>
+        <div id="signals"><div>— nothing held —</div></div>
+      </div>
     </main>
   </div>
 
@@ -288,6 +296,48 @@ export const DASHBOARD_HTML = `<!doctype html>
     set("countdown", pad(h) + ":" + pad(m) + ":" + pad(ss));
   }
 
+  function renderSignals(signals) {
+    var box = document.getElementById("signals");
+    box.innerHTML = "";
+    if (!Array.isArray(signals) || !signals.length) {
+      var e0 = document.createElement("div");
+      e0.textContent = "— nothing held — the beacons pulse every 16 ticks —";
+      box.appendChild(e0);
+      return;
+    }
+    signals.slice().reverse().forEach(function (sig) {
+      var e = document.createElement("div");
+      e.textContent = (sig.decoded ? "✓ " : "· ") + sig.from + "  t" + sig.emitted_t + "→t" + sig.received_t +
+        (sig.decoded ? "  " + sig.payload : "  [undecoded — queue a decode_signal order]");
+      box.appendChild(e);
+    });
+  }
+
+  async function renderStarmap() {
+    var box = document.getElementById("starmap");
+    try {
+      var map = await api("/v1/map");
+      var rows = [];
+      for (var i = 0; i < map.neighbors.length; i++) {
+        var n = map.neighbors[i];
+        try {
+          var v = await api("/v1/systems/" + n.id);
+          rows.push(v.system.name + " (" + v.system.class + ")  lag " + v.lag_ticks +
+            "  as of t" + v.as_of_tick + "  radiating " + v.signature.radiated_eu + " eu" +
+            (v.signature.flare ? "  ⚠ FLARING" : ""));
+        } catch (e) {
+          rows.push(n.id + "  lag " + n.lag_ticks + "  — too faint —");
+        }
+      }
+      box.innerHTML = "";
+      rows.forEach(function (r) {
+        var e = document.createElement("div");
+        e.textContent = r;
+        box.appendChild(e);
+      });
+    } catch (e) { /* keep last render */ }
+  }
+
   function renderLog(lines) {
     var log = document.getElementById("log");
     log.innerHTML = "";
@@ -354,6 +404,8 @@ export const DASHBOARD_HTML = `<!doctype html>
       flareEl.className = l.flare ? "flare" : "";
 
       renderLog(sys.log_tail);
+      renderSignals(sys.signals);
+      renderStarmap();
 
       statusEl.classList.remove("err");
       statusEl.textContent = "live · updated " + new Date().toLocaleTimeString();
